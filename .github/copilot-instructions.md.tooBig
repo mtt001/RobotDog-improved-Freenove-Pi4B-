@@ -1,0 +1,144 @@
+<!-- Copilot System Instruction: Freenove Robot Dog (PyQt + Sockets)
+Always follow these architectural rules when generating or modifying Python code.
+-->
+<!-- Applies to: MainMT.py, Client.py -->
+
+# Copilot Project Instructions: Freenove Robot Dog Client (PyQt + Sockets)
+
+# === Project Note for Copilot GPT-5 === by ChatGPT 5,  revised by MT  2025-11-13
+# Architecture:
+    - Pi (Server) sends raw JPEG frames with 4-byte little-endian unsigned int (struct.pack("<I")) length prefix.
+    - Client reads exact bytes, decodes via cv2.imdecode, runs in background thread.
+    - GUI (MainMT) uses QTimer + QLabel.setPixmap for display (never block UI).
+
+# Guidelines:
+    - Use struct.pack('<I', ln) for frame length (avoid 'L' cross-platform mismatch).
+    - Never use makefile('rb'); always recv exact bytes.
+    - Always convert BGR→RGB and use rgb.strides[0] when creating QImage.
+    - Handle reconnect / timeout gracefully (no blocking loops in main thread).
+
+# DO NOT:
+#   • Use struct.pack('L') (platform-dependent, breaks on macOS)
+#   • Use makefile('rb') or file.read(n)
+#   • Call cv2.imshow() in GUI mode
+#   • Perform blocking socket reads in main thread
+#   • Modify shared self.image without lock
+
+“I’m maintaining a Raspberry Pi robot dog project (Freenove).
+Server sends raw JPEG stream with 4-byte <I> length prefix; client runs in Qt QThread and decodes to QImage.
+Never suggest HTTP MJPEG, never use struct.pack('L'), never block GUI thread.”
+
+### Copilot Reminder
+When adding new functions:
+- In Server: always send with struct.pack("<I", length) + jpeg.
+- In Client: always read exact bytes, decode JPEG with cv2.imdecode, emit frame in thread.
+- In GUI: only update QLabel from QTimer or signal-slot.
+- Never block Qt main thread.
+---
+
+## Big Picture
+This client app (Code/Client) controls and monitors a Freenove Robot Dog via two TCP channels:
+- Port 5001 "command/telemetry" (text lines: `CMD_*#value`), consumed by `MainMT.py` in a background thread.
+- Port 8001 "video" (binary stream: `<len><jpeg>` where len is fixed `struct.pack("<I")` – 4 bytes on Pi, with fallback to 8). Received in `Client.receiving_video` then handed to the GUI.
+## The GUI is PyQt5: `MainMT.py` (primary window) + dialogs (`ui_client.py`, `ui_face.py`, `ui_led.py`). Video frames arrive on a thread, are copied into `Client.image`, and the GUI timer renders them with an overlay.
+
+## Core Files
+## - `MainMT.py`: GUI orchestration, connection management, overlay drawing, movement controls, timers.
+- `Client.py`: Networking and frame acquisition; resilient reconnect loop; atomic frame handoff using `image_lock` and `video_flag`.
+## - `Command.py`: Canonical command names (`CMD_MOVE_FORWARD`, etc.). Always reference constants.
+## - `Face.py`, `PID.py`: Optional per-frame processing (face detection, PID for ball tracking).
+## - `Calibration.py`, `ui_*` files: Device calibration and generated UI layouts.
+## - Historical variants (`MainMT.v112.py`, `Client.original.py`) kept as backups; do not modify.
+
+## Data Flow
+1. GUI presses Connect: `Client.turn_on_client()` creates sockets; video thread + instruction thread start.
+2. Port 5001 thread (`receive_instruction`) reads lines; updates telemetry (`tele_batt_v`, `tele_dist_cm`, `state_text`).
+3. Port 8001 thread (`receiving_video`) loops: read length (4B `<I` first, else `<Q`), read JPEG, decode with OpenCV, optionally run ball/face logic, then `with image_lock: image = frame.copy(); video_flag=False`.
+4. GUI timer (`refresh_image`, ~30-60 fps) checks `video_flag`; if False, copies `image`, draws status bar overlay, sets `video_flag=True`.
+5. Overlay shows IP:PORT, elapsed state seconds, distance, voltage, FPS.
+
+## Networking Conventions
+- Length prefix: Always treat as 4-byte little-endian unsigned (`<I`); fallback to 8-byte `<Q` if out-of-range.
+- Use exact-byte receive (`_recv_exact`), not `file.read(n)`; timeouts are retried.
+- Reconnect logic: Outer while loop + attempt loop (`CONNECT_RETRIES`); socket closed before retry.
+- Telemetry lines use `NAME#payload` (strip optional `CMD_` prefix). Parse defensively; ignore unknown keys.
+
+Compatibility note (legacy servers)
+- Some older Pi images packed length with `struct.pack('L')` (platform-native). Clients here already try 4B `<I` then fall back to 8B `<Q` if needed. Keep this fallback when touching parsing; do not remove it.
+
+## Threading Patterns
+- Producer/consumer flag: `video_flag` False means new frame ready; GUI consumes and sets True.
+- Protect shared frame buffer with `image_lock`; never mutate in-place while GUI might read it.
+- Cooperative stop: set `video_thread_running=False`; loops exit after current iteration. Avoid hard killing threads.
+- Thread cleanup: implement stop flags and close sockets before join(); avoid daemon=True.
+- When window closes, call client.stop_threads() to exit cleanly.
+
+## GUI Patterns (PyQt5)
+- No blocking calls in the main thread (no long sleeps, no direct recv).
+- `QTimer` drives refresh and telemetry polling (`timer_power`, `timer_sonic`).
+- Frame conversion: BGR -> RGB -> `QImage(data, w, h, stride, Format_RGB888).copy()` -> `QPixmap`.
+- Overlay drawing is done on the numpy BGR buffer before conversion using OpenCV text primitives with outline for readability.
+
+## Adding Features
+## - New telemetry: Add a constant in `Command.py`, parse in `receive_instruction`, add a field on `MyWindow` for display.
+- New overlay metric: Extend `_cv_draw_top_bar` signature and update builder call in `refresh_image`.
+## - New movement / action: Use constants from `Command.py`; send via `Client.send_data(f"{cmd.CMD_XYZ}#<arg>\n")`.
+- New video processing: In `Client.receiving_video`, operate on a local copy `work = frame`; publish copy.
+
+## Error Handling & Debug
+- Debug prints prefixed `[DEBUG]` or `[WARN]`; keep context (component + short message).
+- Stall detection: If no frame for >2s, video thread logs `Video stall` and continues.
+- GUI heartbeat: Prints every few seconds counts `frames(displayed/produced)` to diagnose consumption.
+##    - Code pointers: frame counters in `Client.py` (`frames_produced`, `frames_displayed` incremented in receiving/render paths); GUI heartbeat timer in `MainMT.py` (`debug_timer` calling `_debug_tick`).
+
+## Performance Notes
+- Avoid excessive per-frame allocations; reuse local variables in loops.
+- Limit heavy processing (e.g., face detection) when not needed (`face_flag` false).
+
+## Safe Modification Guidelines
+- Do not remove locking around `image` / `video_flag`.
+- Preserve command names; mobile app/server depend on them.
+- Changes to length parsing must honor existing server format; keep fallback logic.
+- Always copy numpy frame before modifying for overlay to avoid race conditions.
+
+## Common Pitfalls (to avoid in contributions)
+- Using `makefile().read()` causing blocking or freezes → use `_recv_exact`.
+- Forgetting to set `video_flag=False` after placing a new frame → GUI never updates.
+- Mutating `self.image` without lock → race → partial frame or crash.
+- Creating `QImage` without `.copy()` → memory reused and image corrupt/blank.
+
+## Debug & run cheatsheet
+- Quick run (macOS zsh):
+    - Main GUI: `python3 MainMT.py`
+    - Standalone stream sanity: `python3 testVideoStream.py`
+- When video/GUI appears frozen, check:
+    - Ports open: Pi reports 5001 (cmd) and 8001 (video) established; only one client per port.
+    - Client counters: `Client.frames_produced` vs `Client.frames_displayed` (CLI [DEBUG] every ~2s).
+    - Handoff: producer sets `video_flag=False`; GUI consumes and sets `True` under `image_lock`.
+    - Stall logs: `[DEBUG] Video stall ~Xs (still waiting for data)` if no frame >2s.
+    - QImage creation: use `QImage(rgb.data, w, h, rgb.strides[0], Format_RGB888).copy()` before `setPixmap`.
+    - Length parse: `_read_len` tries 4B `<I` then 8B `<Q` — keep this to avoid desync on legacy servers.
+
+## Example Command Send
+```python
+self.client.send_data(cmd.CMD_MOVE_FORWARD + "#" + self.client.move_speed + "\n")
+```
+
+## Quick Checklist for New Code
+- Thread safety: accessing shared image? Use `with image_lock`.
+- Networking: reading frames? Use `_read_len` + `_recv_exact`.
+- GUI: updating image? Set `video_flag=True` after consuming.
+- Telemetry: parse lines defensively (`if '#' in line:`), strip prefix.
+
+## Testing Notes
+- Verify with standalone testVideoStream.py before GUI integration.
+- Expect initial frame latency <150 ms on LAN; check `[DEBUG]` logs if above.
+
+## Debug Checklist
+- confirm 5001/8001 open, frames produced vs displayed counters, video_flag handoff, stall logs) and a 2-line “how to run” for MainMT.py and testVideoStream.py.
+
+Provide feedback on unclear sections or if more detail is needed for a particular workflow.
+
+# ------------------------------------------------------------------
+Version: Copilot Instruction v1.2 — MT / ChatGPT reviewed 2025-11-13
+# ------------------------------------------------------------------

@@ -1,0 +1,35 @@
+{
+  "hsv": {
+    "H1_low": 0,
+    "H1_high": 20,
+    "H2_low": 0,
+    "H2_high": 0,
+    "S_low": 120,
+    "S_high": 255,
+    "V_low": 80,
+    "V_high": 255
+  },
+  "filter": {
+    "kernel_size": 3,
+    "smooth_alpha": 0.35,
+    "max_jump_ratio": 0.35,
+    "kp": 0.5,
+    "deadband": 0.02
+  },
+  "tracking": {
+    "mode": "full",
+    "body_interval": 0.6,
+    "deadzone_ratio": 0.18,
+    "body_allow_backward": false,
+    "body_kp": 0.0,
+    "search_forward_enabled": true,
+    "obstacle_avoid_enabled": true,
+    "obstacle_near_cm": 10.0,
+    "obstacle_clear_cm": 30.0,
+    "search_forward_speed": 4,
+    "obstacle_turn_speed": 4
+  },
+  "cv": {
+    "radial_gate": false
+  }
+}

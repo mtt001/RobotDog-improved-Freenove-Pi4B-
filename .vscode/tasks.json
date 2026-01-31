@@ -1,0 +1,178 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "Run Dog Client",
+			"type": "shell",
+			"command": "~/.venvs/freenove-client/bin/python mtDogMain.py"
+		},
+		{
+			"label": "Run AI+YOLO Compare Images",
+			"type": "shell",
+			"command": "~/.venvs/freenove-client/bin/python",
+			"args": [
+				"Temp/test_compare_ai_yolo_images.py"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Run AI+YOLO Compare Images (Temp script)",
+			"type": "shell",
+			"command": "~/.venvs/freenove-client/bin/python",
+			"args": [
+				"Temp/test_compare_ai_yolo_images.py"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Install ultralytics into freenove-client venv",
+			"type": "shell",
+			"command": "~/.venvs/freenove-client/bin/pip",
+			"args": [
+				"install",
+				"ultralytics"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Check ultralytics installed (venv)",
+			"type": "shell",
+			"command": "~/.venvs/freenove-client/bin/python",
+			"args": [
+				"-c",
+				"import ultralytics; print('ultralytics', ultralytics.__version__)"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Check ultralytics installed (venv) 2",
+			"type": "shell",
+			"command": "~/.venvs/freenove-client/bin/python",
+			"args": [
+				"-c",
+				"import ultralytics; print(\"ultralytics\", ultralytics.__version__)"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "pip show ultralytics (venv)",
+			"type": "shell",
+			"command": "~/.venvs/freenove-client/bin/pip show ultralytics || echo 'NOT INSTALLED'",
+			"isBackground": false
+		},
+		{
+			"label": "Install ultralytics (venv) retry",
+			"type": "shell",
+			"command": "~/.venvs/freenove-client/bin/pip install ultralytics",
+			"isBackground": false
+		},
+		{
+			"label": "pip show ultralytics (venv) verify",
+			"type": "shell",
+			"command": "~/.venvs/freenove-client/bin/pip show ultralytics | head -n 5",
+			"isBackground": false
+		},
+		{
+			"label": "Run AI+YOLO Compare Images (with zshrc env)",
+			"type": "shell",
+			"command": "source ~/.zshrc && ~/.venvs/freenove-client/bin/python Temp/test_compare_ai_yolo_images.py",
+			"isBackground": false
+		},
+		{
+			"label": "Generate CV Ball Overlays",
+			"type": "shell",
+			"command": "~/.venvs/freenove-client/bin/python Temp/cv_overlay_ball.py",
+			"isBackground": false
+		},
+		{
+			"label": "Train YOLO v01",
+			"type": "shell",
+			"command": "/Users/mengtatsai/.venvs/freenove-client/bin/python",
+			"args": [
+				"-m",
+				"ultralytics",
+				"yolo",
+				"train",
+				"model=yolov8n.pt",
+				"data=AI_datasets/yolo_ball_v01/dataset.yaml",
+				"imgsz=640",
+				"epochs=100",
+				"batch=16"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Train YOLO v01 (yolo CLI)",
+			"type": "shell",
+			"command": "/Users/mengtatsai/.venvs/freenove-client/bin/yolo",
+			"args": [
+				"train",
+				"model=yolov8n.pt",
+				"data=AI_datasets/yolo_ball_v01/dataset.yaml",
+				"imgsz=640",
+				"epochs=100",
+				"batch=16"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Train YOLO v01 (yolo CLI)",
+			"type": "shell",
+			"command": "/Users/mengtatsai/.venvs/freenove-client/bin/yolo",
+			"args": [
+				"train",
+				"model=yolov8n.pt",
+				"data=AI_datasets/yolo_ball_v01/dataset.yaml",
+				"imgsz=640",
+				"epochs=100",
+				"batch=16"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Train YOLO v01 (smoke)",
+			"type": "shell",
+			"command": "/Users/mengtatsai/.venvs/freenove-client/bin/yolo",
+			"args": [
+				"train",
+				"model=yolov8n.pt",
+				"data=AI_datasets/yolo_ball_v01/dataset.yaml",
+				"imgsz=640",
+				"epochs=1",
+				"batch=16"
+			],
+			"isBackground": false
+		},
+		{
+			"label": "Train YOLO v01 (full)",
+			"type": "shell",
+			"command": "/Users/mengtatsai/.venvs/freenove-client/bin/yolo",
+			"args": [
+				"train",
+				"model=yolov8n.pt",
+				"data=AI_datasets/yolo_ball_v01/dataset.yaml",
+				"imgsz=640",
+				"epochs=100",
+				"batch=16"
+			],
+			"isBackground": true
+		},
+		{
+			"label": "Train YOLO v01 (MPS)",
+			"type": "shell",
+			"command": "/Users/mengtatsai/.venvs/freenove-client/bin/yolo",
+			"args": [
+				"train",
+				"model=yolov8n.pt",
+				"data=AI_datasets/yolo_ball_v01/dataset.yaml",
+				"imgsz=512",
+				"epochs=100",
+				"batch=32",
+				"device=mps",
+				"cache=True",
+				"workers=0"
+			],
+			"isBackground": true
+		}
+	]
+}

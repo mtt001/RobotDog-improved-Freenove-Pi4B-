@@ -1,0 +1,7 @@
+{
+    "python-envs.defaultEnvManager": "ms-python.python:system",
+    "python-envs.pythonProjects": [],
+    "python.defaultInterpreterPath": "/opt/homebrew/bin/python3.12",
+    "python.analysis.logLevel": "Trace",
+    "python.showInterpreterStatusInStatusBar": true
+}
