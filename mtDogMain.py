@@ -22,6 +22,18 @@ os.environ["OPENCV_VIDEOIO_DEBUG"] = "0"
      • Move update_frame into frame_update_controller.py.
  v3.21  (2026-01-31 21:40)    : Extract AI Vision controller
      • Move GPT Vision helpers + histogram update into ai_vision_controller.py.
+ v3.22  (2026-01-31 22:25)    : Extract tracking + telemetry + command helpers
+     • Move ball tracking helpers into ball_tracking_controller.py.
+     • Move telemetry timer/state into telemetry_controller.py.
+     • Move command helpers into dog_command_controller.py.
+ v3.23  (2026-01-31 22:55)    : Extract status UI controller
+     • Move bottom bar status string + button style into status_ui_controller.py.
+ v3.24  (2026-01-31 23:20)    : Extract server/reconnect + UI + overlay helpers
+     • Move server check/reconnect flow into server_reconnect_controller.py.
+     • Move motion grid UI builder into motion_grid_builder.py.
+     • Move status overlay assembly into status_overlay_controller.py.
+ v3.25  (2026-01-31 23:45)    : Extract control panel section builder
+     • Move actions/test/system UI sections into control_panel_sections.py.
  v3.16  (2026-01-31 18:55)    : Extract CV hist/debug controller
      • Move CV histogram + debug window updates into cv_hist_debug.py.
      • Delegate CV hist/debug calls from CameraWindow and CV controller.
@@ -290,7 +302,6 @@ from mtDogBallTrack import (
     TRACKING_MODE_HEAD,
     TRACKING_MODE_BODY,
 )  # <--- CHANGED: Import from merged file
-from Command import COMMAND
 import threading
 import time
 
@@ -304,24 +315,23 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QTimer, QEvent
 from PyQt5.QtGui import QPixmap, QImage
-try:
-    from PyQt5.QtMultimedia import QCameraInfo
-except Exception:
-    QCameraInfo = None  # type: ignore
-try:
-    from AVFoundation import AVCaptureDevice, AVMediaTypeVideo  # type: ignore[import-not-found]
-except Exception:
-    AVCaptureDevice = None  # type: ignore
-    AVMediaTypeVideo = None  # type: ignore
 
 from ui.ai_hist_windows import AIVisionHistogramWindow
 from ui.common_widgets import ClickableLabel
+from ui.control_panel_sections import ControlPanelSectionsBuilder
 from ui.cv_debug_windows import CVBallDebugWindow, CVBallHistogramWindow
 from ui.yolo_debug_windows import YoloVisionDebugWindow
 from ai_vision_controller import AIVisionController
+from ball_tracking_controller import BallTrackingController
+from client_camera_controller import ClientCameraController
+from dog_command_controller import DogCommandController
 from overlay_renderer import OverlayRenderer
 from cv_hist_debug import CVHistDebugController
 from mask_picker import MaskPickerController
+from motion_grid_builder import MotionGridBuilder
+from server_reconnect_controller import ServerReconnectController
+from status_ui_controller import StatusUIController
+from telemetry_controller import TelemetryController
 from cv_ball_detection import CVBallDetectionController
 from yolo_labeling import YoloLabelingController
 from yolo_runtime import YoloRuntimeController
@@ -333,8 +343,6 @@ from mtDogConfig import (
     DOG_VIDEO_PORT,
     DOG_CONTROL_PORT,
     LOW_VOLTAGE_THRESHOLD,
-    CLIENT_CAMERA_INDEX_ORDER,
-    CLIENT_CAMERA_RETRY_SEC,
 )
 from mtDogLogicMixin import DogLogicMixin
 
@@ -763,63 +771,7 @@ class CameraWindow(QWidget, DogLogicMixin):
         # Use the HeadTracker instance inside BallTracker so the Kp slider works
         self.head_tracker = self.ball_tracker.head_tracker 
         self.head_tracking_enabled = False  # toggled with Ball button
-
-        # Track tracking-mode transitions (e.g., to center head when switching modes)
-        self._last_tracking_mode = getattr(self.ball_tracker, "tracking_mode", None)
-        
-        self.last_dog_frame_height = 0      # updated when Dog frame arrives
-        self.body_tracking_interval = 0.6   # seconds between body tracking commands
-        self.last_body_cmd_time = 0.0
-
-        # Body tracking policy: by default, do not command backward motion.
-        # (Backward can be surprising when the ball jitters above center while turning.)
-        self.body_allow_backward = False
-
-        # Body tracking hysteresis state (reduces left/right oscillation near center)
-        self._body_hyst_axis = None  # 'x' | 'y' | None
-        self._body_hyst_dir = 0      # -1 or +1
-
-        # Lost-ball search + obstacle avoidance state
-        self._lost_search_state = "idle"   # 'idle' | 'forward' | 'scan' | 'escape'
-        self._lost_search_last_cmd_ts = 0.0
-        self._lost_search_sent_stop = False
-        self._lost_search_phase = "scan"   # 'scan' | 'forward'
-        self._lost_search_phase_start_ts = 0.0
-
-        # FULL mode head lock (stabilize SONIC ranging): keep head at neutral and skip head tracking.
-        self.full_lock_head_in_full = True
-        self._full_head_last_sent_ts = 0.0
-        self._full_head_sent_once = False
-
-        # FULL-mode close-enough completion sequence
-        self._close_enough_latched = False
-        self._close_enough_seq_state = "idle"  # 'idle' | 'triggered' | 'relax' | 'off'
-        self._close_enough_seq_ts = 0.0
-        self._close_enough_off_timer = None
-
-        # FULL close-enough latch reset + STOP spam guard
-        self._close_enough_last_stop_ts = 0.0
-        self._close_enough_stop_min_interval_s = 0.8
-        self._close_enough_clear_below_ratio = 0.6  # hysteresis: clear latch when diam < (w/4)*ratio
-        self._close_enough_clear_hold_s = 0.6
-        self._close_enough_clear_start_ts = 0.0
-
-        # Ball tracking status (for Color window overlay)
-        self._ball_close_enough = False
-        self._ball_locked = False
-        self._ball_lock_source = ""
-        self._body_cmd_name = ""
-        self._cmd_history = deque(maxlen=10)
-
-        # Post-completion "barking" (beep + yellow flash) + Mask cheer message
-        self._bark_timer = QTimer()
-        self._bark_timer.timeout.connect(self._bark_tick)
-        self._bark_active = False
-        self._bark_pending_start = False
-        self._bark_interval_ms = 2000
-        self._cheer_text = ""
-        self._cheer_visible = False
-        self._cheer_pending_apply = False
+        self.ball_tracking = BallTrackingController(self)
 
         self.ip = ip
         self.video_port = video_port
@@ -855,38 +807,14 @@ class CameraWindow(QWidget, DogLogicMixin):
         self.rx_frame_count = 0
         self.rx_last_time = time.time()
 
-        # Client camera (Mac side) preference / retry
-        self._client_cam_indices = list(CLIENT_CAMERA_INDEX_ORDER)
-        if not self._client_cam_indices:
-            self._client_cam_indices = [0]
-        self._client_cam_opened_index = None
-        self._client_cam_next_try_ts = 0.0
-        self._client_cam_try_pos = 0
-        self._client_cam_fail_count = 0
-        self._client_cam_fail_limit = 10
-        self._client_cam_last_log_ts = 0.0
-        self._client_cam_combo_map = []
+        # Client camera (Mac side) controller
+        self.client_camera = ClientCameraController(self)
 
         # Last displayed BGR frame (for HSV picker)
         self.last_display_frame_bgr = None
 
-        # Telemetry (distance, battery, simple state text)
-        self.distance_cm = 0.0
-        self.battery_v = 0.0
-        self.left_state_seconds = 0
-        self.state_name = "Resting"
-        self.right_state_seconds = 0
-        # Separate textual state (e.g., RELAX / MODE) to avoid flapping the
-        # work/rest overlay.
-        self.dog_state_name = "Resting"
-
-        # Low-battery tracking
-        self.low_voltage_threshold = low_voltage_threshold
-        self.last_low_beep_time = 0.0
-
-        # Telemetry validity
-        self.telemetry_valid = False
-        self.last_telemetry_ok_time = 0.0
+        # Telemetry controller
+        self.telemetry = TelemetryController(self, low_voltage_threshold=low_voltage_threshold)
 
         # Reconnect debounce & background loop control
         self.reconnect_in_progress = False
@@ -921,6 +849,10 @@ class CameraWindow(QWidget, DogLogicMixin):
         self.mask_picker = MaskPickerController(self)
         self.ui_events = UIEventHandlersController(self)
         self.frame_updater = FrameUpdateController(self)
+        self._cmd_history = deque(maxlen=10)
+        self.dog_commands = DogCommandController(self, write_log_func=_write_log)
+        self.status_ui = StatusUIController(self)
+        self.server_reconnect = ServerReconnectController(self)
 
         # cv_debug_window initialized by CVHistDebugController
         self.yolo_debug_window: YoloVisionDebugWindow | None = None
@@ -945,16 +877,10 @@ class CameraWindow(QWidget, DogLogicMixin):
         self.timer.start(30)  # ~33 fps UI refresh
 
         # ---------- Background server check ----------
-        self.server_check_thread = threading.Thread(
-            target=self.server_check_worker,
-            daemon=True,
-        )
-        self.server_check_thread.start()
+        self.server_reconnect.start_server_check_thread()
 
         # ---------- Telemetry poll timer (Dog-mode only) ----------
-        self.telemetry_timer = QTimer()
-        self.telemetry_timer.timeout.connect(self.poll_telemetry)
-        self.telemetry_timer.start(1000)  # 1 Hz
+        self.telemetry.start()
 
         # ---------- Initial probe (auto-enter Dog mode when reachable) ----------
         self._startup_initial_probe()
@@ -963,220 +889,19 @@ class CameraWindow(QWidget, DogLogicMixin):
     # Client camera (Mac side) helpers
     # ==================================================================
     def _log_client_cam(self, msg: str) -> None:
-        last = str(getattr(self, "_client_cam_last_msg", "") or "")
-        if msg == last:
-            return  # Suppress duplicate success messages
-        print(msg)
-        self._client_cam_last_msg = msg
-        self._client_cam_last_log_ts = time.time()
-
-    def _open_client_camera_index(self, index: int, *, require_frame: bool = False):
-        cap = None
-        try:
-            cap = cv2.VideoCapture(int(index), cv2.CAP_AVFOUNDATION)
-        except Exception:
-            cap = None
-        if cap is None or not cap.isOpened():
-            if cap is not None:
-                try:
-                    cap.release()
-                except Exception:
-                    pass
-            return None
-        if require_frame:
-            ok = False
-            for _ in range(3):
-                try:
-                    ret, _ = cap.read()
-                except Exception:
-                    ret = False
-                if ret:
-                    ok = True
-                    break
-                time.sleep(0.05)
-            if not ok:
-                try:
-                    cap.release()
-                except Exception:
-                    pass
-                return None
-        return cap
-
-    def _open_client_camera_best(self, preferred_index=None) -> bool:
-        candidates = []
-        if preferred_index is not None:
-            candidates.append(int(preferred_index))
-        candidates.extend([i for i in self._client_cam_indices if i not in candidates])
-        for idx in candidates:
-            cap = self._open_client_camera_index(idx, require_frame=True)
-            if cap is not None:
-                self.cap = cap
-                self._client_cam_opened_index = idx
-                self._client_cam_fail_count = 0
-                self._log_client_cam(f"[SRC] Client camera opened (index {idx}).")
-                return True
-        self.cap = None
-        self._client_cam_opened_index = None
-        return False
+        return self.client_camera.log_client_cam(msg)
 
     def _open_client_camera_initial(self) -> None:
-        opened = False
-        for idx in list(self._client_cam_indices):
-            cap = self._open_client_camera_index(idx, require_frame=True)
-            if cap is not None:
-                self.cap = cap
-                self._client_cam_opened_index = idx
-                opened = True
-                print(f"[INIT] Mac camera opened OK (index {idx}).")
-                break
-        if not opened:
-            print("[INIT] ERROR: Mac camera could not be opened.")
-            print("[INIT] HINT: Check System Settings > Privacy & Security > Camera")
-            print("[INIT] HINT: Make sure Terminal/Python has camera permission")
-            if self.cap is not None:
-                try:
-                    self.cap.release()
-                except Exception:
-                    pass
-            self.cap = None
-            self._client_cam_opened_index = None
-            self._client_cam_next_try_ts = time.time() + float(CLIENT_CAMERA_RETRY_SEC)
-
-    def _iter_client_camera_indices(self):
-        if not self._client_cam_indices:
-            return [0]
-        n = len(self._client_cam_indices)
-        if self._client_cam_try_pos >= n:
-            self._client_cam_try_pos = 0
-        ordered = (
-            self._client_cam_indices[self._client_cam_try_pos :]
-            + self._client_cam_indices[: self._client_cam_try_pos]
-        )
-        self._client_cam_try_pos = (self._client_cam_try_pos + 1) % n
-        return ordered
+        return self.client_camera.open_client_camera_initial()
 
     def _retry_client_camera_if_needed(self) -> None:
-        if self.cap is not None and self.cap.isOpened():
-            return
-        now = time.time()
-        if now < float(self._client_cam_next_try_ts or 0.0):
-            return
-        for idx in self._iter_client_camera_indices():
-            cap = self._open_client_camera_index(idx, require_frame=True)
-            if cap is not None:
-                self.cap = cap
-                self._client_cam_opened_index = idx
-                self._client_cam_fail_count = 0
-                self._log_client_cam(f"[SRC] Client camera opened (index {idx}).")
-                return
-        self._client_cam_opened_index = None
-        self._client_cam_next_try_ts = now + float(CLIENT_CAMERA_RETRY_SEC)
-
-    def _get_avfoundation_device_names(self):
-        if QCameraInfo is not None:
-            try:
-                cams = QCameraInfo.availableCameras()
-                names = []
-                for cam in cams or []:
-                    try:
-                        names.append(str(cam.description()))
-                    except Exception:
-                        pass
-                if names:
-                    return names
-            except Exception:
-                pass
-        if AVCaptureDevice is None or AVMediaTypeVideo is None:
-            return []
-        try:
-            devices = AVCaptureDevice.devicesWithMediaType_(AVMediaTypeVideo)
-        except Exception:
-            devices = []
-        names = []
-        for dev in devices or []:
-            try:
-                names.append(str(dev.localizedName()))
-            except Exception:
-                pass
-        return names
-
-    def _scan_client_camera_indices(self, max_index: int = 2):
-        # Default to checking just 0, 1, 2 for speed and less log spam.
-        candidates = list(dict.fromkeys(self._client_cam_indices + list(range(0, max_index + 1))))
-        available = []
-        for idx in candidates:
-            cap = self._open_client_camera_index(idx)
-            if cap is not None:
-                available.append(idx)
-                try:
-                    cap.release()
-                except Exception:
-                    pass
-        return available
+        return self.client_camera.retry_client_camera_if_needed()
 
     def _refresh_client_camera_list(self, *, select_index=None):
-        if not hasattr(self, "mac_cam_combo"):
-            return
-        available = self._scan_client_camera_indices()
-        self.mac_cam_combo.blockSignals(True)
-        try:
-            self.mac_cam_combo.clear()
-        except Exception:
-            pass
-        self._client_cam_combo_map = []
-        names = self._get_avfoundation_device_names()
-        if names:
-            try:
-                self.mac_cam_combo.setToolTip("Detected devices: " + ", ".join(names))
-            except Exception:
-                pass
-        for i, idx in enumerate(available):
-            label = f"Index {idx}"
-            self.mac_cam_combo.addItem(label)
-            self._client_cam_combo_map.append(idx)
-        if not available:
-            self.mac_cam_combo.addItem("No camera")
-            self._client_cam_combo_map = []
-        else:
-            if select_index is None:
-                select_index = self._client_cam_opened_index
-            if select_index in self._client_cam_combo_map:
-                self.mac_cam_combo.setCurrentIndex(self._client_cam_combo_map.index(select_index))
-            else:
-                self.mac_cam_combo.setCurrentIndex(0)
-                # Ensure a working stream is opened by default
-                try:
-                    first_index = self._client_cam_combo_map[0]     # type: ignore[index], list index
-                except Exception:
-                    first_index = None
-                if first_index is not None:         # 
-                    self._open_client_camera_best(preferred_index=first_index)
-        self.mac_cam_combo.blockSignals(False)
+        return self.client_camera.refresh_client_camera_list(select_index=select_index)
 
     def _on_mac_camera_changed(self, combo_index: int):
-        if combo_index is None or combo_index < 0:
-            return
-        if combo_index >= len(self._client_cam_combo_map):
-            return
-        target_index = self._client_cam_combo_map[combo_index]
-        if target_index == self._client_cam_opened_index and self.cap is not None and self.cap.isOpened():
-            return
-        # Switch to Mac camera mode when user selects a client camera
-        self.use_dog_video = False
-        self.update_status_ui()
-        # Prefer selected index first
-        self._client_cam_indices = [target_index] + [i for i in self._client_cam_indices if i != target_index]
-        try:
-            if self.cap is not None:
-                self.cap.release()
-        except Exception:
-            pass
-        self.cap = None
-        if self._open_client_camera_best(preferred_index=target_index):
-            self._log_client_cam(f"[SRC] Client camera selected (index {self._client_cam_opened_index}).")
-            return
-        self._client_cam_opened_index = None
-        self._client_cam_next_try_ts = 0.0
+        return self.client_camera.on_mac_camera_changed(combo_index)
 
     # ==================================================================
     # Post-completion bark + cheer helpers
@@ -1188,43 +913,13 @@ class CameraWindow(QWidget, DogLogicMixin):
         return self.mask_picker.apply_mask_cheer_if_needed()
 
     def _start_barking(self):
-        if self._bark_active:
-            return
-        self._bark_active = True
-        try:
-            self._bark_timer.start(int(self._bark_interval_ms))
-        except Exception:
-            self._bark_active = False
+        return self.ball_tracking.start_barking()
 
     def _stop_barking(self):
-        self._bark_active = False
-        try:
-            if self._bark_timer.isActive():
-                self._bark_timer.stop()
-        except Exception:
-            pass
+        return self.ball_tracking.stop_barking()
 
     def _bark_tick(self):
-        # Auto-stop barking if the completion conditions are no longer true.
-        if not self._bark_should_run():
-            self._stop_barking()
-            # Hide the cheer banner as well to avoid confusing state.
-            self._set_mask_cheer("", visible=False)
-            return
-
-        # Only bark when in Dog mode with a control link.
-        if (
-            not self.use_dog_video
-            or self.dog_client is None
-            or not getattr(self.dog_client, "tcp_flag", False)
-            or not getattr(self, "server_control_ok", False)
-        ):
-            return
-        # Single beep + yellow flash
-        try:
-            self._beep_pattern(beeps=1, on_s=0.10, off_s=0.00)
-        except Exception:
-            pass
+        return self.ball_tracking.bark_tick()
 
     def _yolo_label_help_text(self) -> str:
         return self.yolo_labeling.yolo_label_help_text()
@@ -1322,27 +1017,7 @@ class CameraWindow(QWidget, DogLogicMixin):
         return self.yolo_runtime.update_yolo_train_hist_window()
 
     def _bark_should_run(self) -> bool:
-        """Barking should only run after FULL completion reaches OFF and we still have a ball lock."""
-        try:
-            mode = getattr(self.ball_tracker, "tracking_mode", None)
-        except Exception:
-            mode = None
-        try:
-            missed = int(getattr(self.ball_tracker, "missed_frames", 0) or 0)
-        except Exception:
-            missed = 0
-
-        return bool(
-            self.ball_mode_enabled
-            and self.use_dog_video
-            and self.dog_client is not None
-            and getattr(self.dog_client, "tcp_flag", False)
-            and getattr(self, "server_control_ok", False)
-            and mode == TRACKING_MODE_FULL
-            and bool(getattr(self, "_close_enough_latched", False))
-            and str(getattr(self, "_close_enough_seq_state", "")) == "off"
-            and missed == 0
-        )
+        return self.ball_tracking.bark_should_run()
 
     def _on_mask_clear_cheer(self):
         return self.mask_picker.on_mask_clear_cheer()
@@ -1434,162 +1109,13 @@ class CameraWindow(QWidget, DogLogicMixin):
         panel_layout.addSpacing(4)
 
         # ---- Movement grid ----
-        move_label = QLabel("Motion (W/E/R, S/D/F, C)")
-        move_label.setStyleSheet("color:#8899aa; font-size:12px;")
-        panel_layout.addWidget(move_label)
-
-        move_frame = QFrame()
-        move_layout = QHBoxLayout()
-        move_layout.setContentsMargins(0, 0, 0, 0)
-        move_layout.setSpacing(6)
-
-        def make_round_button(text: str, tooltip: str, color: str):
-            btn = QPushButton(text)
-            # Slightly larger buttons + smaller font prevents multi-line text overflow
-            # on macOS/HiDPI which can look like "overlapped" buttons.
-            btn.setFixedSize(60, 60)
-            btn.setStyleSheet(
-                f"""
-                QPushButton {{
-                    background-color:{color};
-                    color:#ffffff;
-                    border:none;
-                    border-radius:30px;
-                    font-size:14px;
-                    padding:2px;
-                }}
-                QPushButton:hover {{
-                    background-color:#ffffff;
-                    color:{color};
-                }}
-                """
-            )
-            btn.setToolTip(tooltip)
-            return btn
-
-        col1 = QVBoxLayout(); col1.setSpacing(4)
-        col2 = QVBoxLayout(); col2.setSpacing(4)
-        col3 = QVBoxLayout(); col3.setSpacing(4)
-
-        self.btn_W = make_round_button("⟲\nW", "W: Turn Left", "#007bff")
-        self.btn_E = make_round_button("↑\nE", "E: Move Forward", "#00aa55")
-        self.btn_R = make_round_button("⟳\nR", "R: Turn Right", "#007bff")
-
-        self.btn_S = make_round_button("←\nS", "S: Move Left", "#00aa88")
-        self.btn_D = make_round_button("◎\nD", "D: Relax", "#666666")
-        self.btn_F = make_round_button("→\nF", "F: Move Right", "#00aa88")
-
-        self.btn_C = make_round_button("↓\nC", "C: Move Backward", "#00aa55")
-
-        col1.addWidget(self.btn_W)
-        col1.addWidget(self.btn_S)
-        col1.addStretch()
-
-        col2.addWidget(self.btn_E)
-        col2.addWidget(self.btn_D)
-        col2.addWidget(self.btn_C)
-
-        col3.addWidget(self.btn_R)
-        col3.addWidget(self.btn_F)
-        col3.addStretch()
-
-        move_layout.addLayout(col1)
-        move_layout.addLayout(col2)
-        move_layout.addLayout(col3)
-        move_frame.setLayout(move_layout)
-        panel_layout.addWidget(move_frame)
+        MotionGridBuilder(self).build(panel_layout)
 
         panel_layout.addSpacing(8)
 
-        # ---- Actions ----
-        act_label = QLabel("Actions")
-        act_label.setStyleSheet("color:#8899aa; font-size:12px;")
-        panel_layout.addWidget(act_label)
-
-        def make_pill_button(text: str, tooltip: str, bg: str):
-            btn = QPushButton(text)
-            btn.setMinimumHeight(32)
-            btn.setStyleSheet(
-                f"""
-                QPushButton {{
-                    background-color:{bg};
-                    color:#ffffff;
-                    border:none;
-                    border-radius:16px;
-                    padding:4px 10px;
-                    font-size:14px;
-                }}
-                QPushButton:hover {{
-                    background-color:#ffffff;
-                    color:{bg};
-                }}
-                """
-            )
-            btn.setToolTip(tooltip)
-            return btn
-
-        # Row 1: Buzzer, LED, Calibration
-        actions_frame1 = QFrame()
-        actions_layout1 = QHBoxLayout()
-        actions_layout1.setContentsMargins(0, 0, 0, 0)
-        actions_layout1.setSpacing(8)
-
-        self.btn_Beep = make_pill_button("🔔", "B: Buzzer beep", "#ffaa00")
-        self.btn_LED = make_pill_button("LED\nL", "L: LED pattern", "#ff8800")
-        self.btn_Calib = make_pill_button("Cal\nK", "K: Servo calibration", "#0099cc")
-
-        actions_layout1.addWidget(self.btn_Beep)
-        actions_layout1.addWidget(self.btn_LED)
-        actions_layout1.addWidget(self.btn_Calib)
-        actions_frame1.setLayout(actions_layout1)
-        panel_layout.addWidget(actions_frame1)
-
-        # Row 2: Ball (autonomous tracking) + Face
-        actions_frame2 = QFrame()
-        actions_layout2 = QHBoxLayout()
-        actions_layout2.setContentsMargins(0, 0, 0, 0)
-        actions_layout2.setSpacing(8)
-
-        self.btn_Ball = make_pill_button(
-            "Ball",
-            "Autonomous tracking (moves dog) + Mask window",
-            "#0066cc",
-        )
-        self.btn_Face = make_pill_button("Face", "Face tracking (future)", "#8844cc")
-
-        actions_layout2.addWidget(self.btn_Ball)
-        actions_layout2.addWidget(self.btn_Face)
-        actions_frame2.setLayout(actions_layout2)
-        panel_layout.addWidget(actions_frame2)
-
-        # ---- Object Detection Test (NO dog movement) ----
-        test_label = QLabel("Object Detection Test")
-        test_label.setStyleSheet("color:#8899aa; font-size:12px;")
-        panel_layout.addWidget(test_label)
-
-        test_frame = QFrame()
-        test_frame.setStyleSheet("background-color:#0f151d; border:1px solid #233144; border-radius:10px;")
-        test_layout = QVBoxLayout()
-        test_layout.setContentsMargins(8, 8, 8, 8)
-        test_layout.setSpacing(8)
-
-        self.btn_CVBall = make_pill_button("CV Ball", "CV detector test (no motion)", "#00bcd4")
-        self.btn_YoloVision = make_pill_button("Yolo Vision", "YOLO detector test (no motion)", "#2e7d32")
-        self.btn_AIVision = make_pill_button("GPT Vision", "GPT detector test (no motion)", "#00a3a3")
-
-        # Make them easier to tap and read in the narrow panel
-        try:
-            self.btn_CVBall.setMinimumHeight(36)
-            self.btn_YoloVision.setMinimumHeight(36)
-            self.btn_AIVision.setMinimumHeight(36)
-        except Exception:
-            pass
-
-        test_layout.addWidget(self.btn_CVBall)
-        test_layout.addWidget(self.btn_YoloVision)
-        test_layout.addWidget(self.btn_AIVision)
-        test_frame.setLayout(test_layout)
-        panel_layout.addWidget(test_frame)
+        section_builder = ControlPanelSectionsBuilder(self)
+        section_builder.build_actions(panel_layout)
+        section_builder.build_test(panel_layout)
 
         panel_layout.addSpacing(8)
 
@@ -1640,23 +1166,7 @@ class CameraWindow(QWidget, DogLogicMixin):
 
         panel_layout.addStretch()
 
-        # ---- System row ----
-        sys_label = QLabel("System (D: Relax, Q: Quit)")
-        sys_label.setStyleSheet("color:#8899aa; font-size:12px;")
-        panel_layout.addWidget(sys_label)
-
-        sys_frame = QFrame()
-        sys_layout = QHBoxLayout()
-        sys_layout.setContentsMargins(0, 0, 0, 0)
-        sys_layout.setSpacing(8)
-
-        self.btn_play = make_pill_button("Play", "P: Play pose sequence", "#777777")
-        self.btn_quit = make_pill_button("Quit", "Q: Quit program", "#cc3333")
-
-        sys_layout.addWidget(self.btn_play)
-        sys_layout.addWidget(self.btn_quit)
-        sys_frame.setLayout(sys_layout)
-        panel_layout.addWidget(sys_frame)
+        section_builder.build_system(panel_layout)
 
         self.ctrl_panel.setLayout(panel_layout)
 
@@ -1745,183 +1255,28 @@ class CameraWindow(QWidget, DogLogicMixin):
         return self.frame_updater.update_frame()
 
     def _cmd_key_to_human(self, key_char: str | None, *, send_stop: bool = False) -> str:
-        if send_stop:
-            return "Stop"
-        if not key_char:
-            return "Idle"
-        key = str(key_char).lower()
-        mapping = {
-            "w": "Turn-L",
-            "r": "Turn-R",
-            "e": "Forward",
-            "c": "Backward",
-            "s": "Left",
-            "f": "Right",
-            "d": "Relax",
-        }
-        return mapping.get(key, key.upper())
+        return self.dog_commands.cmd_key_to_human(key_char, send_stop=send_stop)
 
     def _log_cmd(self, payload: str, *, tag: str = "CMD") -> None:
-        try:
-            msg = str(payload or "").strip()
-            if not msg:
-                return
-            ts = datetime.now().strftime("%H:%M:%S")
-            entry = f"{ts} {tag}: {msg}"
-            try:
-                self._cmd_history.append(entry)
-            except Exception:
-                pass
-            _write_log(f"[{tag}] {msg}")
-        except Exception:
-            return
+        return self.dog_commands.log_cmd(payload, tag=tag)
 
     def _send_relax_only(self):
-        if (
-            not self.use_dog_video
-            or self.dog_client is None
-            or not getattr(self.dog_client, "tcp_flag", False)
-            or not getattr(self, "server_control_ok", False)
-        ):
-            return
-        try:
-            self._send_cmd(COMMAND.CMD_RELAX + "\n", tag="RELAX")
-        except Exception as e:
-            print(f"[CMD] relax failed: {e}")
+        return self.dog_commands.send_relax_only()
 
     def _send_stop_pwm_only(self):
-        if (
-            not self.use_dog_video
-            or self.dog_client is None
-            or not getattr(self.dog_client, "tcp_flag", False)
-            or not getattr(self, "server_control_ok", False)
-        ):
-            return
-        try:
-            self._send_cmd(COMMAND.CMD_STOP_PWM + "\n", tag="STOP_PWM")
-        except Exception as e:
-            print(f"[CMD] stop_pwm failed: {e}")
+        return self.dog_commands.send_stop_pwm_only()
 
     def _trigger_close_enough_sequence(self, *, ball_diameter: float | None, frame_w: float):
-        """One-shot completion: double beep + double green flash, then STOP+RELAX, then OFF after 5s."""
-        if self._close_enough_latched:
-            return
-        if (
-            not self.use_dog_video
-            or self.dog_client is None
-            or not getattr(self.dog_client, "tcp_flag", False)
-            or not getattr(self, "server_control_ok", False)
-        ):
-            return
-
-        self._close_enough_latched = True
-        self._close_enough_seq_state = "triggered"
-        self._close_enough_seq_ts = time.time()
-
-        # Audible + visible cue
-        try:
-            self._beep_pattern(beeps=2, on_s=0.12, off_s=0.12)
-            self._led_flash(flashes=2, on_s=0.18, off_s=0.18, color=(0, 255, 0))
-        except Exception:
-            pass
-
-        # Immediately stop and relax
-        try:
-            self.send_stop_motion()
-        except Exception:
-            pass
-        try:
-            self._send_relax_only()
-            self._close_enough_seq_state = "relax"
-        except Exception:
-            pass
-
-        # Cancel any previous pending OFF to avoid stacking timers.
-        prev = getattr(self, "_close_enough_off_timer", None)
-        try:
-            if prev is not None and prev.is_alive():
-                prev.cancel()
-        except Exception:
-            pass
-
-        def _do_off():
-            self._send_stop_pwm_only()
-            self._close_enough_seq_state = "off"
-            self._close_enough_seq_ts = time.time()
-            # After OFF, start barking and show a cheer message in Mask window.
-            if self.ball_mode_enabled:
-                self._bark_pending_start = True
-                self._set_mask_cheer(
-                    "Ball located! FULL complete → STOP, RELAX, OFF.\n"
-                    "Barking: 1 beep + yellow flash every 2s. Click Clear to stop.",
-                    visible=True,
-                )
-
-        self._close_enough_off_timer = threading.Timer(5.0, _do_off)
-        self._close_enough_off_timer.daemon = True
-        self._close_enough_off_timer.start()
-        try:
-            print(
-                f"[FULL] Close enough -> cue+STOP+RELAX then OFF in 5s "
-                f"(diam={ball_diameter if ball_diameter is not None else 'NA'} thr={frame_w/4.0:.1f})"
-            )
-        except Exception:
-            pass
+        return self.ball_tracking.trigger_close_enough_sequence(ball_diameter=ball_diameter, frame_w=frame_w)
 
     def _handle_tracking_mode_transition(self, mode): # NEW, called from update_frame
-        if mode == self._last_tracking_mode:
-            return
-
-        self._last_tracking_mode = mode
-
-        # Reset FULL head-lock one-shot when leaving/entering FULL mode.
-        try:
-            if mode != TRACKING_MODE_FULL:
-                self._full_head_sent_once = False
-        except Exception:
-            pass
-
-        # When switching into BODY tracking, keep the head neutral (90 deg).
-        if mode == TRACKING_MODE_BODY:
-            try:
-                self.head_tracker.reset()
-                neutral = int(round(getattr(self.head_tracker.cfg, "neutral_deg", 90)))
-            except Exception:
-                neutral = 90
-
-            if (
-                self.use_dog_video
-                and self.dog_client is not None
-                and getattr(self.dog_client, "tcp_flag", False)
-            ):
-                self.send_head_angle(neutral)
-
-        if mode == TRACKING_MODE_FULL:
-            try:
-                self._full_head_sent_once = False
-            except Exception:
-                pass
+        return self.ball_tracking.handle_tracking_mode_transition(mode)
 
     # ==================================================================
     # Head servo command helper
     # ==================================================================
     def send_head_angle(self, angle_deg: int):
-        """
-        Send a head-servo angle command to the Dog Pi.
-        """
-        if self.dog_client is None or not getattr(self.dog_client, "tcp_flag", False):
-            return
-
-        # Clamp angle to HeadTracker's safe range
-        angle_deg = max(
-            int(self.head_tracker.cfg.min_deg),
-            min(int(self.head_tracker.cfg.max_deg), int(angle_deg))
-        )
-
-        # Use string command, not bytes
-        cmd_str = f"{COMMAND.CMD_HEAD}#{angle_deg}\n"
-        self._send_cmd(cmd_str, tag="HEAD")  # REMOVE .encode()
-        print(f"[HEAD] CMD_HEAD → {angle_deg}° /r")     # send with /r to return to beginning of line, no line feed, minimize spawn messages
+        return self.dog_commands.send_head_angle(angle_deg)
 
     # ==================================================================
     # Events & helpers
@@ -1975,572 +1330,10 @@ class CameraWindow(QWidget, DogLogicMixin):
             super().keyPressEvent(event)
 
     def _update_full_body_tracking(self, ball_center, frame_shape):
-        if self.ball_tracker.tracking_mode not in (TRACKING_MODE_FULL, TRACKING_MODE_BODY):
-            return
-        if ball_center is None or frame_shape is None:
-            return
-        # Pull tuning from BallTracker (updated by mask window sliders)
-        try:
-            self.body_tracking_interval = float(
-                getattr(self.ball_tracker, "body_tracking_interval", self.body_tracking_interval)
-            )
-        except Exception:
-            pass
-        interval = max(0.05, min(5.0, float(self.body_tracking_interval)))
-
-        try:
-            deadzone_ratio = float(getattr(self.ball_tracker, "body_deadzone_ratio", 0.18))
-        except Exception:
-            deadzone_ratio = 0.18
-        deadzone_ratio = max(0.05, min(0.50, deadzone_ratio))
-
-        h = frame_shape[0]
-        w = frame_shape[1] if len(frame_shape) > 1 else 0
-        if h == 0 or w == 0:
-            return
-
-        now = time.time()
-
-        center_x = w / 2.0
-        center_y = h / 2.0
-        x_off = ball_center[0] - center_x   # positive = ball is RIGHT of center
-        y_off = ball_center[1] - center_y   # positive = ball is BELOW center
-
-        # FULL tracking: forward-approach policy based on apparent ball size.
-        # Keep moving toward the ball until its diameter exceeds 1/4 of screen width.
-        # (When close enough, stop forward motion even if Y offset still suggests moving.)
-        full_mode = self.ball_tracker.tracking_mode == TRACKING_MODE_FULL
-        ball_radius = getattr(self.ball_tracker, "last_radius", None)
-        try:
-            ball_diameter = float(ball_radius) * 2.0 if ball_radius is not None else None
-        except Exception:
-            ball_diameter = None
-        thr_hi = (w / 4.0) if w > 0 else 0.0
-        try:
-            clear_ratio = float(getattr(self.ball_tracker, "full_close_enough_clear_below_ratio", self._close_enough_clear_below_ratio))
-        except Exception:
-            clear_ratio = float(getattr(self, "_close_enough_clear_below_ratio", 0.85))
-        clear_ratio = max(0.20, min(0.99, clear_ratio))
-        thr_lo = thr_hi * clear_ratio
-
-        # Extra "close enough" confirmation:
-        # If the ball's bottom edge reaches the bottom of the frame, consider it close enough.
-        # This covers cases where the ball is still small but physically very near.
-        bottom_margin_px = 2.0
-        try:
-            bottom_edge_reached = bool(
-                full_mode
-                and ball_radius is not None
-                and float(ball_center[1]) + float(ball_radius) >= (float(h) - bottom_margin_px)
-            )
-        except Exception:
-            bottom_edge_reached = False
-
-        close_enough_by_size = bool(full_mode and ball_diameter is not None and thr_hi > 0 and ball_diameter >= thr_hi)
-        close_enough_hi = bool(close_enough_by_size or bottom_edge_reached)
-
-        # Latch auto-clear uses hysteresis on size, but also requires the ball is no longer
-        # touching the bottom edge.
-        close_enough_lo = bool(
-            full_mode
-            and ball_diameter is not None
-            and thr_lo > 0
-            and ball_diameter < thr_lo
-            and (not bottom_edge_reached)
-        )
-        close_enough = close_enough_hi
-
-        # Publish for status overlay
-        try:
-            latched = bool(getattr(self, "_close_enough_latched", False)) if full_mode else False
-            self._ball_close_enough = bool(close_enough_hi or latched)
-        except Exception:
-            pass
-
-        # FULL-mode completion sequence when close enough.
-        if full_mode and close_enough_hi:
-            self._trigger_close_enough_sequence(ball_diameter=ball_diameter, frame_w=float(w))
-
-        # If we've already completed/started the close-enough sequence, do not send further motion.
-        # However, auto-clear the latch (with hysteresis + hold time) once the ball is no longer close.
-        if full_mode and self._close_enough_latched:
-            seq = str(getattr(self, "_close_enough_seq_state", "idle"))
-            can_auto_clear = seq in ("off", "idle")
-
-            # Hysteresis-based auto-reset to resolve the "unexpected Stop" latch.
-            # Only allow clearing after the completion sequence reaches OFF/IDLE.
-            if can_auto_clear and close_enough_lo:
-                if float(getattr(self, "_close_enough_clear_start_ts", 0.0) or 0.0) <= 0.0:
-                    self._close_enough_clear_start_ts = now
-                hold_s = float(getattr(self, "_close_enough_clear_hold_s", 0.6) or 0.6)
-                hold_s = max(0.0, min(5.0, hold_s))
-                if (now - float(self._close_enough_clear_start_ts)) >= hold_s:
-                    self._close_enough_latched = False
-                    self._close_enough_clear_start_ts = 0.0
-                    # Resume normal tracking immediately.
-                    # (Do not send STOP here; the controller below will decide.)
-                else:
-                    pass
-            else:
-                self._close_enough_clear_start_ts = 0.0
-
-            if self._close_enough_latched:
-                # While the completion sequence is still in progress, keep the robot safe by
-                # occasionally re-sending STOP (rate-limited). Once OFF (stop_pwm) is reached,
-                # do not send STOP anymore and show cmd:Off in the HUD.
-                show_cmd = "Stop"
-                if seq == "off":
-                    show_cmd = "Off"
-                elif seq == "relax":
-                    show_cmd = "Relax"
-
-                if seq in ("triggered", "relax"):
-                    try:
-                        min_dt = float(getattr(self, "_close_enough_stop_min_interval_s", 0.8) or 0.8)
-                    except Exception:
-                        min_dt = 0.8
-                    min_dt = max(0.2, min(5.0, min_dt))
-                    if (now - float(getattr(self, "_close_enough_last_stop_ts", 0.0))) >= min_dt:
-                        try:
-                            self.send_stop_motion()
-                        except Exception:
-                            pass
-                        self._close_enough_last_stop_ts = now
-
-                try:
-                    t0 = float(getattr(self, "_close_enough_seq_ts", 0.0) or 0.0)
-                    dt = max(0.0, time.time() - t0) if t0 > 0 else 0.0
-                    lines = [
-                        f"TRACK:full axis:- cmd:{show_cmd}",
-                        "GOAL:close_enough → completion (latched)",
-                        f"SEQ:{seq} +{dt:.1f}s  reset:diam<thr_lo for {float(getattr(self, '_close_enough_clear_hold_s', 0.6) or 0.6):.1f}s",
-                    ]
-                    if seq == "off":
-                        lines.insert(2, "POWER:off (stop_pwm)")
-                    elif seq == "relax":
-                        lines.insert(2, "SERVOS:relax (waiting for off)")
-                    if ball_diameter is not None:
-                        lines.append(
-                            f"diam:{ball_diameter:.0f} thr_hi:{thr_hi:.0f} thr_lo:{thr_lo:.0f} bottom:{int(bool(bottom_edge_reached))} close:{int(bool(close_enough_hi))}"
-                        )
-                    self.ball_tracker.body_debug_lines = lines
-                except Exception:
-                    pass
-                return
-            try:
-                self.send_stop_motion()
-            except Exception:
-                pass
-            try:
-                seq = str(getattr(self, "_close_enough_seq_state", "idle"))
-                t0 = float(getattr(self, "_close_enough_seq_ts", 0.0) or 0.0)
-                dt = max(0.0, time.time() - t0) if t0 > 0 else 0.0
-                lines = [
-                    "TRACK:full axis:- cmd:Stop",
-                    f"GOAL:close_enough → Stop, Relax, Off (5s)",
-                    f"SEQ:{seq} +{dt:.1f}s",
-                ]
-                if ball_diameter is not None:
-                    lines.append(f"diam:{ball_diameter:.0f} thr:{(w/4.0):.0f} close:1")
-                self.ball_tracker.body_debug_lines = lines
-            except Exception:
-                pass
-            return
-
-        try:
-            body_kp = float(getattr(self.ball_tracker, "body_kp", 0.0))
-        except Exception:
-            body_kp = 0.0
-        body_kp = max(0.0, min(5.0, body_kp))
-
-        x_ctl = x_off
-        y_ctl = y_off
-
-        def _kp_speed(error_ctl: float, dead: float, span: float) -> int | None:
-            """Map error magnitude to a motion speed (2..10) using Body-Kp.
-
-            If body_kp==0, return None to keep the existing fixed-speed behavior.
-            """
-            if body_kp <= 0.0:
-                return None
-            mag = max(0.0, abs(float(error_ctl)) - float(dead))
-            if mag <= 0.0:
-                return None
-            frac = mag / max(1.0, float(span))
-            frac = max(0.0, min(1.0, frac))
-            eff = max(0.0, min(1.0, body_kp * frac))
-            min_speed = 2
-            max_speed = 10
-            return int(round(min_speed + (max_speed - min_speed) * eff))
-
-        # Deadzone (tunable)
-        x_dead = max(20.0, w * deadzone_ratio)
-        y_dead = max(20.0, h * deadzone_ratio)
-
-        # Hysteresis: enter further out, exit further in
-        x_margin = max(8.0, x_dead * 0.25)
-        y_margin = max(8.0, y_dead * 0.25)
-        x_enter = x_dead + x_margin
-        x_exit = max(0.0, x_dead - x_margin)
-        y_enter = y_dead + y_margin
-        y_exit = max(0.0, y_dead - y_margin)
-
-        # Policy: do not move forward/back unless X is centered within tolerance.
-        # Use the X deadzone as the centering tolerance.
-        x_centered = abs(x_off) <= x_dead
-
-        # Policy: in body tracking, optionally disallow backward motion.
-        # Prefer the BallTracker setting (tunable/persisted via mask window).
-        allow_backward = bool(
-            getattr(
-                self.ball_tracker,
-                "body_allow_backward",
-                getattr(self, "body_allow_backward", False),
-            )
-        )
-
-        def sign_dir(v: float) -> int:
-            return -1 if v < 0 else 1
-
-        axis = self._body_hyst_axis
-        direction = int(self._body_hyst_dir)
-        command = None
-        speed_override = None
-        send_stop = False
-
-        axis_before = axis
-
-        if axis == "x":
-            if abs(x_ctl) < x_exit:
-                axis = None
-                direction = 0
-                send_stop = True
-            else:
-                new_dir = sign_dir(x_ctl)
-                if new_dir != direction and abs(x_ctl) > x_enter:
-                    direction = new_dir
-                command = "w" if direction < 0 else "r"
-                speed_override = _kp_speed(x_ctl, x_dead, (w / 2.0) - x_dead)
-        elif axis == "y":
-            # If X drifts out of tolerance, immediately switch to turn-to-center.
-            if not x_centered:
-                axis = "x"
-                direction = sign_dir(x_ctl)
-                command = "w" if direction < 0 else "r"
-
-            if full_mode:
-                # FULL mode: ignore Y-offset for approach; use ball size to decide forward/stop.
-                if close_enough:
-                    axis = None
-                    direction = 0
-                    send_stop = True
-                else:
-                    direction = 1
-                    if x_centered:
-                        command = "e"  # forward toward ball
-                        # Speed based on how far we are from the size threshold.
-                        if ball_diameter is not None:
-                            approach_err = max(0.0, (w / 4.0) - ball_diameter)
-                            speed_override = _kp_speed(approach_err, 0.0, (w / 4.0))
-                    else:
-                        command = None
-            else:
-                # BODY mode: original Y-offset based forward/back behavior.
-                # Forward-only Y control when backward is disabled.
-                if (not allow_backward) and (y_ctl < -y_enter):
-                    axis = None
-                    direction = 0
-                    send_stop = True
-                elif abs(y_ctl) < y_exit:
-                    axis = None
-                    direction = 0
-                    send_stop = True
-                else:
-                    new_dir = sign_dir(y_ctl)
-                    if new_dir != direction and abs(y_ctl) > y_enter:
-                        direction = new_dir
-                    # Only allow forward/back when X is centered.
-                    if x_centered:
-                        if allow_backward:
-                            command = "c" if direction < 0 else "e"
-                        else:
-                            command = "e" if direction > 0 else None
-                    else:
-                        command = None
-                    if command is not None:
-                        speed_override = _kp_speed(y_ctl, y_dead, (h / 2.0) - y_dead)
-        else:
-            # Prefer X corrections (turn) over Y (forward/back)
-            # Turn whenever X is outside the deadzone tolerance.
-            if not x_centered:
-                axis = "x"
-                direction = sign_dir(x_ctl)
-                command = "w" if direction < 0 else "r"
-                speed_override = _kp_speed(x_ctl, x_dead, (w / 2.0) - x_dead)
-            elif full_mode:
-                # FULL mode: if centered and not close enough, keep approaching.
-                if x_centered and not close_enough:
-                    axis = "y"
-                    direction = 1
-                    command = "e"
-                    if ball_diameter is not None:
-                        approach_err = max(0.0, (w / 4.0) - ball_diameter)
-                        speed_override = _kp_speed(approach_err, 0.0, (w / 4.0))
-                else:
-                    axis = None
-                    direction = 0
-                    send_stop = True
-            elif (abs(y_ctl) > y_enter) if allow_backward else (y_ctl > y_enter):
-                axis = "y"
-                direction = sign_dir(y_ctl)
-                # Only enter Y axis if X is centered.
-                if x_centered:
-                    if allow_backward:
-                        command = "c" if direction < 0 else "e"
-                    else:
-                        command = "e" if direction > 0 else None
-                else:
-                    axis = "x"
-                    direction = sign_dir(x_ctl)
-                    command = "w" if direction < 0 else "r"
-                if command is not None:
-                    speed_override = _kp_speed(y_ctl, y_dead, (h / 2.0) - y_dead)
-
-        self._body_hyst_axis = axis
-        self._body_hyst_dir = direction
-
-        # ---- Debug lines for Mask window ----
-        # Stored on BallTracker (shared with BallMaskWindow) so you can see live
-        # body decisions without reading the terminal.
-        try:
-            cmd_dbg = self._cmd_key_to_human(command, send_stop=bool(send_stop))
-            mode_dbg = "full" if full_mode else "body"
-            lines = [
-                f"TRACK:{mode_dbg} axis:{axis or '-'} cmd:{cmd_dbg}",
-                f"off=({x_off:+.0f},{y_off:+.0f}) dead=({x_dead:.0f},{y_dead:.0f})",
-            ]
-            if full_mode:
-                if ball_diameter is not None:
-                    lines.append(
-                        f"diam:{ball_diameter:.0f} thr_hi:{thr_hi:.0f} thr_lo:{thr_lo:.0f} close:{int(bool(close_enough_hi))}"
-                    )
-                else:
-                    lines.append(
-                        f"diam:-- thr_hi:{thr_hi:.0f} thr_lo:{thr_lo:.0f} close:{int(bool(close_enough_hi))}"
-                    )
-            else:
-                spd_dbg = speed_override if speed_override is not None else int(getattr(self, "move_speed", 8))
-                lines.append(f"kp:{body_kp:.2f} spd:{int(spd_dbg)} x_ok:{int(bool(x_centered))}")
-            self.ball_tracker.body_debug_lines = lines
-        except Exception:
-            pass
-
-        axis_changed = axis_before != axis
-
-        if send_stop:
-            # Stop immediately once we re-enter the inner band.
-            self.send_stop_motion()
-            self.last_body_cmd_time = now
-            try:
-                self._body_cmd_name = ""
-            except Exception:
-                pass
-            return
-
-        # If we just switched axes (e.g., from Y to X), allow an immediate corrective command.
-        can_send = axis_changed or ((now - self.last_body_cmd_time) >= interval)
-
-        if command and can_send:
-            print(
-                f"[BODY] mode={self.ball_tracker.tracking_mode} axis={axis} cmd={command} "
-                f"x_off={x_off:+.0f} y_off={y_off:+.0f} "
-                f"kp={body_kp:.2f} "
-                f"dead=({x_dead:.0f},{y_dead:.0f})"
-            )
-            self.send_motion_command(command, speed_override=speed_override)
-            self.last_body_cmd_time = now
-            try:
-                self._body_cmd_name = self._cmd_key_to_human(command)
-            except Exception:
-                pass
-        elif can_send and not command:
-            try:
-                self._body_cmd_name = ""
-            except Exception:
-                pass
+        return self.ball_tracking.update_full_body_tracking(ball_center, frame_shape)
 
     def _update_lost_ball_search(self, frame_shape):
-        """When ball is lost, search by moving forward; avoid obstacles via SONIC.
-
-        Policy:
-          - If range <= near_cm: turn-left until range > clear_cm.
-          - Otherwise: move forward slowly to search.
-          - If telemetry (sonic) is stale: stop for safety.
-        """
-        t = self.ball_tracker
-        if not (getattr(t, "search_forward_enabled", True) or getattr(t, "obstacle_avoid_enabled", True)):
-            return
-
-        # If FULL-mode completion sequence is active, do not keep searching.
-        if bool(getattr(self, "_close_enough_latched", False)):
-            return
-
-        now = time.time()
-        interval = float(getattr(t, "body_tracking_interval", 0.6))
-        interval = max(0.20, min(2.00, interval))
-        if (now - float(getattr(self, "_lost_search_last_cmd_ts", 0.0))) < interval:
-            return
-
-        # Require recent telemetry for obstacle logic; otherwise stop.
-        telemetry_ok = bool(getattr(self, "telemetry_valid", False)) and (
-            (now - float(getattr(self, "last_telemetry_ok_time", 0.0))) <= 2.0
-        )
-        if not telemetry_ok:
-            if self._lost_search_state != "idle" or not self._lost_search_sent_stop:
-                self.send_stop_motion()
-                self._lost_search_sent_stop = True
-            self._lost_search_state = "idle"
-            try:
-                self.ball_tracker.body_debug_lines = [
-                    "SEARCH:idle (telemetry stale)",
-                    f"missed:{int(getattr(t, 'missed_frames', 0))}",
-                ]
-            except Exception:
-                pass
-            self._lost_search_last_cmd_ts = now
-            return
-
-        dist = float(getattr(self, "distance_cm", 9999.0) or 9999.0)
-        near_cm = float(getattr(t, "obstacle_near_cm", 10.0) or 10.0)
-        clear_cm = float(getattr(t, "obstacle_clear_cm", 30.0) or 30.0)
-        if clear_cm < near_cm:
-            clear_cm = near_cm
-
-        search_forward_enabled = bool(getattr(t, "search_forward_enabled", True))
-        obstacle_avoid_enabled = bool(getattr(t, "obstacle_avoid_enabled", True))
-
-        # If both toggles are off, treat as feature disabled.
-        if (not search_forward_enabled) and (not obstacle_avoid_enabled):
-            if not self._lost_search_sent_stop:
-                self.send_stop_motion()
-                self._lost_search_sent_stop = True
-            self._lost_search_state = "idle"
-            self._lost_search_phase = "scan"
-            self._lost_search_phase_start_ts = 0.0
-            try:
-                self.ball_tracker.body_debug_lines = [
-                    "SEARCH:off",
-                    f"dist:{dist:.1f}cm near:{near_cm:.0f} clear:{clear_cm:.0f}",
-                    f"missed:{int(getattr(t, 'missed_frames', 0))}",
-                ]
-            except Exception:
-                pass
-            self._lost_search_last_cmd_ts = now
-            return
-
-        want_escape = obstacle_avoid_enabled and (dist <= near_cm)
-
-        # Search policy:
-        # - If forward enabled: run a simple repeating pattern: scan-left 2s, forward 1s.
-        # - If forward disabled: keep scanning (turn-left) only.
-        preferred_state = "pattern" if search_forward_enabled else "scan"
-        state = str(getattr(self, "_lost_search_state", "idle"))
-        if state == "escape":
-            if dist > clear_cm:
-                state = preferred_state
-                self.send_stop_motion()
-                self._lost_search_sent_stop = True
-                # After escaping, restart the search pattern from scan.
-                self._lost_search_phase = "scan"
-                self._lost_search_phase_start_ts = now
-        else:
-            state = "escape" if want_escape else preferred_state
-            if state == "escape":
-                self.send_stop_motion()
-                self._lost_search_sent_stop = True
-                # Pause/restart pattern timing while escaping.
-                self._lost_search_phase = "scan"
-                self._lost_search_phase_start_ts = now
-
-        self._lost_search_state = state
-
-        cmd = None
-        speed_override = None
-        if state == "escape":
-            cmd = "w"  # always turn-left for escape
-            speed_override = int(getattr(t, "obstacle_turn_speed", 4) or 4)
-        elif state == "pattern":
-            scan_s = 2.0
-            forward_s = 1.0
-            if float(getattr(self, "_lost_search_phase_start_ts", 0.0)) <= 0.0:
-                self._lost_search_phase_start_ts = now
-                self._lost_search_phase = "scan"
-
-            phase = str(getattr(self, "_lost_search_phase", "scan"))
-            phase_elapsed = max(0.0, now - float(getattr(self, "_lost_search_phase_start_ts", now)))
-            phase_dur = scan_s if phase == "scan" else forward_s
-            phase_switched = False
-            if phase_elapsed >= phase_dur:
-                phase = "forward" if phase == "scan" else "scan"
-                self._lost_search_phase = phase
-                self._lost_search_phase_start_ts = now
-                phase_elapsed = 0.0
-                phase_dur = scan_s if phase == "scan" else forward_s
-                phase_switched = True
-
-            if phase == "forward":
-                cmd = "e"
-                speed_override = int(getattr(t, "search_forward_speed", 4) or 4)
-            else:
-                cmd = "w"
-                speed_override = int(getattr(t, "obstacle_turn_speed", 4) or 4)
-
-            # If we just switched phase, send immediately (don’t wait for the interval gate).
-            if phase_switched:
-                self._lost_search_last_cmd_ts = 0.0
-
-            # Export pattern info for UI
-            pattern_line = f"PATTERN:{phase} {phase_elapsed:.1f}/{phase_dur:.1f}s (scan=2.0 fwd=1.0)"
-        elif state == "scan":
-            cmd = "w"  # turn-left to scan for the ball
-            speed_override = int(getattr(t, "obstacle_turn_speed", 4) or 4)
-            pattern_line = "PATTERN:scan-only"
-        else:
-            cmd = None
-            pattern_line = ""
-
-        if cmd is None:
-            if not self._lost_search_sent_stop:
-                self.send_stop_motion()
-                self._lost_search_sent_stop = True
-            try:
-                self.ball_tracker.body_debug_lines = [
-                    f"SEARCH:{state} (disabled)",
-                    f"dist:{dist:.1f}cm near:{near_cm:.0f} clear:{clear_cm:.0f}",
-                    f"missed:{int(getattr(t, 'missed_frames', 0))}",
-                ]
-            except Exception:
-                pass
-            self._lost_search_last_cmd_ts = now
-            return
-
-        # Send search motion
-        self._lost_search_sent_stop = False
-        self.send_motion_command(cmd, speed_override=speed_override)
-        self._lost_search_last_cmd_ts = now
-
-        try:
-            cmd_name = self._cmd_key_to_human(cmd)
-            lines = [
-                f"SEARCH:{state} cmd:{cmd_name} spd:{int(speed_override) if speed_override is not None else int(getattr(self, 'move_speed', 8))}",
-                f"dist:{dist:.1f}cm near:{near_cm:.0f} clear:{clear_cm:.0f}",
-                f"missed:{int(getattr(t, 'missed_frames', 0))}",
-            ]
-            if pattern_line:
-                lines.insert(1, pattern_line)
-            self.ball_tracker.body_debug_lines = lines
-        except Exception:
-            pass
+        return self.ball_tracking.update_lost_ball_search(frame_shape)
 
     # ------------------------------------------
     def handle_ball_button(self):

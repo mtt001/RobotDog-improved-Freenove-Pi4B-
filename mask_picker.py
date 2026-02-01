@@ -10,6 +10,8 @@
      Mask window + HSV picker controller extracted from mtDogMain.py.
      Preserves picker behavior, hover HSV tracking, and mask window updates.
 
+ v1.01  (2026-01-31 21:40)    : Typing compatibility fix
+     • Replace instance attribute annotations with type comments.
  v1.00  (2026-01-31 19:20)    : Initial mask/picker controller extraction
      • Move mask window + HSV picker handling out of mtDogMain.py.
 ===============================================================================
@@ -27,7 +29,7 @@ from mtDogBallTrack import BallMaskWindow
 class MaskPickerController:
     def __init__(self, host):
         self._host = host
-        self._host.ball_mask_window: BallMaskWindow | None = None
+        self._host.ball_mask_window = None
         self._host._cheer_text = ""
         self._host._cheer_visible = False
         self._host._cheer_pending_apply = False

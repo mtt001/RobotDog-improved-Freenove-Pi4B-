@@ -1,22 +1,31 @@
+===============================================================================
+ Project : Freenove Robot Dog - Enhanced Video Client (Mac)
+ File    : README.md
+ Author  : MT & GitHub Copilot
+
+ Description:
+     Client-side architecture, runtime flow, and setup guide for the
+     refactored mtDogMain.py application and supporting modules.
+
+ v1.31  (2026-02-02)          : Add HTTP 408 troubleshooting note
+     • Document common 408 timeout causes and checks.
+ v1.30  (2026-02-01)          : Refactor-aligned documentation refresh
+     • Update entry points, runtime flow, and module map.
+     • Align setup with venv usage and current scripts.
+===============================================================================
+
 # Freenove Robot Dog Client - Architecture & Development Guide
 
-```
-╔══════════════════════════════════════════════════════════════════════════╗
-║                 FREENOVE ROBOT DOG - CLIENT APPLICATION                  ║
-║                     Desktop Control & Video Streaming                    ║
-╚══════════════════════════════════════════════════════════════════════════╝
-
 Project      : Freenove Robot Dog Kit for Raspberry Pi - Client Software
-Version      : 1.21 (Main.py), 1.16 (Client.py)
+Version      : mtDogMain.py v3.25+, Client.py (current)
 Platform     : macOS / Linux / Windows
-Language     : Python 3.7+
+Language     : Python 3.9+
 Framework    : PyQt5, OpenCV, NumPy
 Setup        : Virtual Environment (~/.venvs/freenove-client) + smartdog alias
 
 Authors      : MT & GitHub Copilot
 Created      : 2024-10-15 (Original Freenove codebase)
-Revised      : 2025-11-17 (Current architecture documentation)
-Updated      : 2025-12-28 (Virtual environment & smartdog setup documentation)
+Revised      : 2026-02-01 (Refactor-aligned documentation)
 Maintainers  : MT (Lead Developer), GitHub Copilot (AI Assistant)
 
 Repository   : /Users/mengtatsai/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/
@@ -27,10 +36,9 @@ Purpose      : This README documents the client-side architecture, threading
                model, communication protocols, development guidelines, and
                setup instructions for the Freenove Robot Dog desktop application.
 
-Last Updated : 2025-12-28 17:00 PST
-Status       : Production (v1.20) - Actively Maintained
+Last Updated : 2026-02-02
+Status       : Active (refactored mtDogMain.py)
 Setup Status : ✅ Virtual environment configured with smartdog alias
-```
 
 ---
 
@@ -67,8 +75,8 @@ Setup Status : ✅ Virtual environment configured with smartdog alias
 
 **Application**: Desktop PyQt5 client for controlling the Freenove Robot Dog  
 **Platform**: macOS / Linux / Windows  
-**Language**: Python 3.7+  
-**Current Version**: Main.py v1.20, Client.py v1.15
+**Language**: Python 3.9+  
+**Current Version**: mtDogMain.py v3.25+ (refactored), Client.py (current)
 
 This client provides:
 - Real-time video streaming (MJPEG over TCP, 15-30 FPS)
@@ -77,6 +85,7 @@ This client provides:
 - Sensor monitoring (ultrasonic distance, battery voltage, IMU)
 - Feature modules (face recognition, ball tracking, LED control, servo calibration)
 - In-app debug viewer for video pipeline diagnostics (press T or F10)
+- Refactored controllers for vision, tracking, UI events, telemetry, and overlays
 
 ---
 
@@ -85,8 +94,8 @@ This client provides:
 ### Prerequisites
 
 ```bash
-# Python 3.7+ with virtual environment (already configured)
-# Dependencies: PyQt5, opencv-python, numpy (installed in venv)
+# Python 3.9+ with virtual environment (already configured)
+# Dependencies: PyQt5, opencv-contrib-python, numpy (installed in venv)
 
 # macOS users: Qt5 may be needed
 brew install qt@5
@@ -138,7 +147,7 @@ echo "📂 Working directory: $(pwd)"
 exec $SHELL
 ```
 
-**Key mechanics:**
+**Key mechanics**:
 - `source` activates venv in the current shell environment
 - `exec $SHELL` replaces the script with a new shell, preserving venv activation
 - Works from any directory in your system
@@ -155,11 +164,11 @@ exec $SHELL
    - Edit `IP.txt` or enter IP in the GUI dialog
 
 3. **Launch Client**:
-   ```bash
-   python mtDogMain.py
-   # or for original version:
-   python Main.py
-   ```
+    ```bash
+    ~/.venvs/freenove-client/bin/python mtDogMain.py
+    # or legacy version:
+    ~/.venvs/freenove-client/bin/python Main.py
+    ```
 
 4. **Connect to Robot**:
    - Enter robot IP address (e.g., `192.168.1.150`)
@@ -287,13 +296,13 @@ Example:
 
 ```
 Client/
-├── Main.py                    # Main GUI window (v1.20)
-│   ├── MyWindow               # Main application window
-│   ├── faceWindow             # Face recognition UI
-│   ├── calibrationWindow      # Servo calibration UI
-│   └── ledWindow              # LED control UI
+├── mtDogMain.py               # Main GUI runtime (refactored)
+│   ├── CameraWindow           # Main application window
+│   ├── YoloLabelWindow        # Manual labeling window
+│   ├── YoloCompareWindow      # YOLO compare window
+│   └── YoloTrainHistogramWindow # YOLO training hist window
 │
-├── Client.py                  # Network client & shared state (v1.15)
+├── Client.py                  # Network client & shared state
 │   ├── Client                 # Core client class
 │   │   ├── receiving_video()  # Video receive thread (port 8001)
 │   │   ├── send_data()        # Command sender (port 5001)
@@ -301,14 +310,27 @@ Client/
 │   │   └── turn_off_client()  # Cleanup
 │   └── cmd                    # Command constants (CMD_MOVE_*, etc.)
 │
-├── testVideoStream.py         # Debug viewer (standalone + embedded)
-│   ├── DebugStreamWindow      # In-app diagnostic window
-│   └── draw_top_bar()         # Overlay rendering (FPS, battery, etc.)
+├── frame_update_controller.py # Per-frame capture/detect/render
+├── ball_tracking_controller.py# Ball tracking state + sequences
+├── telemetry_controller.py    # Telemetry timer + state
+├── dog_command_controller.py  # Command history + helpers
+├── ai_vision_controller.py    # GPT Vision pipeline
+├── yolo_runtime.py            # YOLO runtime + training
+├── cv_ball_detection.py       # CV ball detection pipeline
+├── cv_hist_debug.py           # CV histogram + debug window logic
+├── mask_picker.py             # Mask window + HSV picker
+├── ui_event_handlers.py       # UI button handlers + toggles
+├── server_reconnect_controller.py # Ping/reconnect loop
+├── status_ui_controller.py    # Bottom status UI
+├── status_overlay_controller.py # Overlay assembly
+├── overlay_renderer.py        # Overlay drawing helpers
+├── client_camera_controller.py# Mac camera selection + retry
+├── motion_grid_builder.py     # Motion grid UI builder
+├── ui/control_panel_sections.py # Control panel UI sections
 │
+├── Main.py                    # Legacy GUI (pre-refactor)
 ├── Calibration.py             # Servo offset manager
-│   └── Ui_calibration         # PyQt5 designer output
-│
-├── ui_client.py               # Main window UI layout
+├── ui_client.py               # Legacy main window UI layout
 ├── ui_led.py                  # LED window UI layout
 ├── ui_face.py                 # Face window UI layout
 │
@@ -321,37 +343,40 @@ Client/
 
 ## 🔑 Key Components
 
-### Main.py (v1.20)
+### mtDogMain.py (v3.25+)
 
-**Purpose**: PyQt5 GUI application  
+**Purpose**: Refactored PyQt5 GUI application  
 **Key Responsibilities**:
-- User interface rendering and event handling
-- Video frame display pipeline (QLabel painting)
-- Keyboard/mouse input processing
-- Timer-based refresh loops (video, telemetry, debug)
-- Window management (main, debug, calibration, LED, face)
+- Composition root for controller modules
+- Per-frame update pipeline (capture → detect → overlay → render)
+- UI event handling and mode toggles
+- Timer-based refresh loops (frame, telemetry, status)
+- Window management (main, YOLO label/compare/train hist)
 
 **Critical Methods**:
 
 | Method | Purpose | Timing |
 |--------|---------|--------|
-| `refresh_image()` | Consumes frames from `Client.image`, draws overlays, updates QLabel | Every 33ms (≈30 FPS) |
-| `receive_instruction()` | Listens on port 5001 for telemetry (battery, distance) | Runs in thread until disconnect |
-| `_overlay_refresh_if_stalled()` | Redraws status bar when no new frames arrive | Every 500ms |
-| `connect()` | Initiates TCP connections, starts threads, validates success | User-triggered |
+| `update_frame()` (via `FrameUpdateController`) | Captures frame, runs detectors, draws overlays, updates QLabel | Every 30ms (≈33 FPS) |
+| `poll_telemetry()` | Requests telemetry (battery/distance) | Every 1000ms |
+| `periodic_server_check()` | Ping/reconnect health checks | Background thread | 
+| `build_ui()` | Builds main UI sections | On startup |
 | `closeEvent()` | Graceful shutdown: stops threads, closes sockets | Window close |
 
 **State Variables**:
 
 ```python
-self.client.image          # Latest BGR frame (numpy array)
-self.client.image_lock     # Protects image reads/writes
-self.client.video_flag     # False = new frame ready; True = consumed
-self._last_frame_bgr       # Cached frame for stall handling
-self.tele_batt_v           # Battery voltage (float)
-self.tele_dist_cm          # Ultrasonic distance (float)
-self._fps                  # Smoothed display framerate
+self.dog_client.image          # Latest BGR frame (numpy array)
+self.dog_client.image_lock     # Protects image reads/writes
+self.last_display_frame_bgr    # Cached frame for picker/overlays
+self.distance_cm               # Ultrasonic distance (float)
+self.battery_v                 # Battery voltage (float)
+self.rx_fps                     # Receive FPS (Dog stream)
+self.display_fps                # UI draw FPS
 ```
+
+For the complete refactor map and execution order, see:
+- [README.Main File Structure.md](README.Main%20File%20Structure.md)
 
 ---
 
@@ -2834,6 +2859,11 @@ sudo tcpdump -i wlan0 host <robot_ip> and '(port 5001 or port 8001)'
 
 ## 🐛 Troubleshooting
 
+HTTP 408 (Request Timeout)
+- Typically from HTTP tools/proxies, not the raw TCP client.  
+- Causes: server not responding, wrong IP/port, high latency.  
+- Check: robot IP, ports 5001/8001 open, Wi‑Fi stability; retry after reconnect.
+
 Video not displaying
 - Symptoms: Black screen or only placeholder.
 - Checks:
@@ -2889,7 +2919,7 @@ See the project’s LICENSE file.
 ╚══════════════════════════════════════════════════════════════════════════╝
 
 Document Version  : 1.1  
-Last Updated      : 2025-11-17 15:45 PST  
+Last Updated      : 2026-02-02 15:45 PST  
 Maintained By     : MT (Lead Developer), GitHub Copilot (AI Assistant)  
 Repository        : /Users/mengtatsai/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/  
 Status            : Production - Actively Maintained

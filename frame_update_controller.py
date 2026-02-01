@@ -12,6 +12,8 @@
 
  v1.00  (2026-01-31 21:00)    : Initial frame update controller extraction
      • Extract update_frame logic into FrameUpdateController.
+ v1.01  (2026-01-31 23:45)    : Group frame update steps
+     • Split camera capture, detection, and overlay/render steps.
 ===============================================================================
 """
 
@@ -26,10 +28,13 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage, QPixmap
 
 from mtDogBallTrack import TRACKING_MODE_FULL, TRACKING_MODE_HEAD, TRACKING_MODE_BODY
+from status_overlay_controller import StatusOverlayController
+
 
 class FrameUpdateController:
     def __init__(self, host):
         self._host = host
+        self.status_overlay = StatusOverlayController(host)
 
     def update_frame(self):
         """
@@ -40,18 +45,35 @@ class FrameUpdateController:
           • UI: display FPS (Qt repaint rate).
         """
         host = self._host
-        frame = None
-        new_dog_frame = False
 
-        # ---- Count display FPS (every timer tick) ----
+        frame = self._capture_frame()
+        if frame is None:
+            return
+
+        # Keep last BGR frame for picker clicks
+        host.last_display_frame_bgr = frame.copy()  # ** for HSV picker, before any drawing or ball tracking **
+
+        frame, mask, abort_frame = self._run_detection_pipeline(frame)
+        if abort_frame:
+            return
+        frame_rgb = self._apply_overlays(frame, mask)
+        self._render_frame(frame_rgb)
+
+    def _update_display_fps(self):
+        host = self._host
         host.display_frame_count += 1
         now = time.time()
         if now - host.display_last_time >= 1.0:
-            host.display_fps = (
-                host.display_frame_count / (now - host.display_last_time)
-            )
+            host.display_fps = host.display_frame_count / (now - host.display_last_time)
             host.display_frame_count = 0
             host.display_last_time = now
+
+    def _capture_frame(self):
+        host = self._host
+        frame = None
+        new_dog_frame = False
+
+        self._update_display_fps()
 
         # Dog video
         if host.use_dog_video and host.dog_client is not None:
@@ -160,23 +182,23 @@ class FrameUpdateController:
             # In Mac mode we simply mirror the display FPS into rx_fps
             host.rx_fps = host.display_fps
 
-        # Keep last BGR frame for picker clicks
-        host.last_display_frame_bgr = frame.copy()  # ** for HSV picker, before any drawing or ball tracking **
+        return frame
 
-        # ---- Optional ball tracking & mask window ----
+    def _run_detection_pipeline(self, frame):
+        host = self._host
         mask = None
         ball_center = None
+        abort_frame = False
+
         # IMPORTANT: autonomous tracking behavior (motion/head commands) must only run in "Ball" mode.
         # CV Ball / Yolo Vision / GPT Vision are test-only modes and must NOT move the dog.
         if host.ball_mode_enabled and frame is not None:
-            #print(f"[DEBUG] Ball mode enabled: {host.ball_mode_enabled}")
             # If Yolo Vision is enabled, prefer YOLO detections for tracking.
             if host.yolo_vision_enabled and host.yolo_detector is not None:
                 frame, ball_center = host.yolo_runtime.run_ball_mode(frame)
             else:
                 # Run HSV mask ball detection + drawing on the BGR frame
                 mask, frame = host.ball_tracker.process_with_mask(frame)
-                #print(f"[DEBUG] After process_with_mask: last_center={host.ball_tracker.last_center} last_radius={host.ball_tracker.last_radius}")
 
                 ball_center = host.ball_tracker.last_center
                 try:
@@ -270,292 +292,302 @@ class FrameUpdateController:
                             if angle is not None:
                                 host.send_head_angle(int(round(angle)))
 
-        # ---- GPT Vision detection (test module) ----
         if host.ai_vision_enabled and frame is not None:
-            now_ai = time.time()
-            # In one-shot mode, only call the API when a click has armed a request.
-            if host.ai_one_shot_mode and not bool(getattr(host, "_ai_one_shot_pending", False)):
-                # Still allow drawing of last detections, but do not call API.
-                pass
-            elif not bool(getattr(host, "_ai_request_sent", False)):
-                try:
-                    print("[GPT] Sending frame to vision model...")
-                    src_frame = host.last_display_frame_bgr if host.last_display_frame_bgr is not None else frame
-                    try:
-                        h_src, w_src = src_frame.shape[:2]
-                        src_tag = "last_display_frame" if host.last_display_frame_bgr is not None else "current_frame"
-                        print(f"[GPT] Frame source: {src_tag} size={w_src}x{h_src}")
-                    except Exception:
-                        pass
-                    host._ai_detections = host.ai_detector.analyze(src_frame)
-                    print(
-                        f"[GPT] Response: {len(host._ai_detections)} candidates"
-                        + (f" (latency {host.ai_detector.last_latency_s:.2f}s)" if host.ai_detector.last_latency_s else "")
-                    )
-                    if host.ai_detector.last_error:
-                        host.ai_vision.disable_due_to_error(host.ai_detector.last_error)
-                        host._ai_last_ts = now_ai
-                        host._ai_request_sent = True
-                        return
-                    # Inform user if AI returned no candidates
-                    if not host._ai_detections:
-                        host.ai_vision.set_status("GPT Vision: no ball detected (0 candidates)")
-                    else:
-                        # Clear stale status on success; filtering may set a new one below.
-                        host._ai_status_msg = ""
-                        host._ai_status_ts = 0.0
-                    raw_text = getattr(host.ai_detector, "last_raw_text", None)
-                    if raw_text:
-                        print("[GPT] Raw response:\n" + str(raw_text))
-                    # Post-filter detections by score + HSV (to reduce false positives)
-                    # Disabled in one-shot trial mode: show whatever the model returned.
-                    if (not host.ai_one_shot_mode) and src_frame is not None and host._ai_detections:
-                        try:
-                            hsv_img = cv2.cvtColor(src_frame, cv2.COLOR_BGR2HSV)
-                        except Exception:
-                            hsv_img = None
-                        h_ai, w_ai = src_frame.shape[:2]
-                        filtered = []
-                        rejected_hue = 0
-                        rejected_sv = 0
-                        rejected_score = 0
-                        for idx, det in enumerate(host._ai_detections, start=1):
-                            try:
-                                if isinstance(det, dict):
-                                    x_val = det.get("x", 0)
-                                    y_val = det.get("y", 0)
-                                    r_val = det.get("r", 0)
-                                    score_val = det.get("score", 0.0)
-                                else:
-                                    x_val = getattr(det, "x", 0)
-                                    y_val = getattr(det, "y", 0)
-                                    r_val = getattr(det, "r", 0)
-                                    score_val = getattr(det, "score", 0.0)
-                                x_f = float(x_val)
-                                y_f = float(y_val)
-                                r_f = float(r_val)
-                                if 0 < x_f <= 1.0 and 0 < y_f <= 1.0 and w_ai > 1 and h_ai > 1:
-                                    x_f *= w_ai
-                                    y_f *= h_ai
-                                if 0 < r_f <= 1.0 and min(w_ai, h_ai) > 1:
-                                    r_f *= min(w_ai, h_ai)
-                                x = int(round(x_f))
-                                y = int(round(y_f))
-                                r = float(r_f)
-                            except Exception:
-                                continue
-                            try:
-                                score_f = float(score_val)
-                            except Exception:
-                                score_f = 0.0
-                            if score_f < float(getattr(host, "ai_score_min", 0.0)):
-                                rejected_score += 1
-                                continue
-                            if (
-                                host.ai_hsv_filter_enabled
-                                and hsv_img is not None
-                                and 0 <= x < w_ai
-                                and 0 <= y < h_ai
-                            ):
-                                try:
-                                    H, S, V = [int(v) for v in hsv_img[y, x]]
-                                except Exception:
-                                    H, S, V = 0, 0, 0
-                                min_s = int(getattr(host, "ai_min_s", 0))
-                                min_v = int(getattr(host, "ai_min_v", 0))
-                                if S < min_s or V < min_v:
-                                    print(f"[GPT] Reject #{idx}@({x},{y}): HSV({H},{S},{V}) - S<{min_s} or V<{min_v}")
-                                    rejected_sv += 1
-                                    continue
-                                ok_h = False
-                                for lo, hi in getattr(host, "ai_hue_ranges", [(0, 179)]):
-                                    if int(lo) <= H <= int(hi):
-                                        ok_h = True
-                                        break
-                                if not ok_h:
-                                    print(f"[GPT] Reject #{idx}@({x},{y}): HSV({H},{S},{V}) - Hue not in {host.ai_hue_ranges}")
-                                    rejected_hue += 1
-                                    continue
-                            filtered.append(det)
-                        if filtered:
-                            print(f"[GPT] Filtered: {len(filtered)}/{len(host._ai_detections)} kept")
-                            host._ai_status_msg = ""
-                            host._ai_status_ts = 0.0
-                        else:
-                            print("[GPT] Filtered: 0 kept")
-                            # Surface why on the Color window
-                            if host.ai_hsv_filter_enabled and (rejected_hue or rejected_sv):
-                                why = []
-                                if rejected_hue:
-                                    why.append("Hue")
-                                if rejected_sv:
-                                    why.append("S/V")
-                                why_s = "+".join(why) if why else "HSV"
-                                host.ai_vision.set_status(f"GPT Vision: rejected by {why_s} filter (try disabling GPT HSV filter)")
-                            elif rejected_score:
-                                host.ai_vision.set_status("GPT Vision: rejected by score filter")
-                            else:
-                                host.ai_vision.set_status("GPT Vision: 0 kept after filtering")
-                        host._ai_detections = filtered
-                    # Auto-calibrate HSV ranges from the best AI detection
-                    if (not host.ai_one_shot_mode) and src_frame is not None and host._ai_detections:
-                        try:
-                            best_det = max(
-                                host._ai_detections,
-                                key=lambda d: float(d.get("score", 0.0)) if isinstance(d, dict) else float(getattr(d, "score", 0.0)),
-                            )
-                        except Exception:
-                            best_det = host._ai_detections[0]
-                        host.ai_vision.auto_calibrate_hsv_from_ai(src_frame, best_det)
-                    # Refine AI circles using HSV mask within ROI
-                    if (not host.ai_one_shot_mode) and src_frame is not None and host._ai_detections and host.ai_refine_enabled:
-                        refined = []
-                        for det in host._ai_detections:
-                            refined.append(host.ai_vision.refine_ai_circle(src_frame, det))
-                        host._ai_detections = refined
-                    # Log candidate info: diameter, center HSV, and (x,y)
-                    if src_frame is not None and host._ai_detections:
-                        try:
-                            hsv_img = cv2.cvtColor(src_frame, cv2.COLOR_BGR2HSV)
-                        except Exception:
-                            hsv_img = None
-                        h_ai, w_ai = src_frame.shape[:2]
-                        for idx, det in enumerate(host._ai_detections, start=1):
-                            try:
-                                if isinstance(det, dict):
-                                    x_val = det.get("x", 0)
-                                    y_val = det.get("y", 0)
-                                    r_val = det.get("r", 0)
-                                    score_val = det.get("score", 0.0)
-                                else:
-                                    x_val = getattr(det, "x", 0)
-                                    y_val = getattr(det, "y", 0)
-                                    r_val = getattr(det, "r", 0)
-                                    score_val = getattr(det, "score", 0.0)
-                                x_f = float(x_val)
-                                y_f = float(y_val)
-                                r_f = float(r_val)
-                                if 0 < x_f <= 1.0 and 0 < y_f <= 1.0 and w_ai > 1 and h_ai > 1:
-                                    x_f *= w_ai
-                                    y_f *= h_ai
-                                if 0 < r_f <= 1.0 and min(w_ai, h_ai) > 1:
-                                    r_f *= min(w_ai, h_ai)
-                                x = int(round(x_f))
-                                y = int(round(y_f))
-                                r = float(r_f)
-                                norm_xy = bool(0 < float(x_val) <= 1.0 and 0 < float(y_val) <= 1.0)
-                                norm_r = bool(0 < float(r_val) <= 1.0)
-                            except Exception:
-                                print(f"[AI] #{idx} raw: {det}")
-                                continue
-                            x = max(0, min(w_ai - 1, x))
-                            y = max(0, min(h_ai - 1, y))
-                            d_text = "D?" if r <= 0 else f"D{int(round(2 * r))}"
-                            H = S = V = 0
-                            if hsv_img is not None:
-                                try:
-                                    H, S, V = [int(v) for v in hsv_img[y, x]]
-                                except Exception:
-                                    H, S, V = 0, 0, 0
-                            try:
-                                score_f = float(score_val)
-                            except Exception:
-                                score_f = 0.0
-                            ai_hsv = None
-                            try:
-                                if isinstance(det, dict):
-                                    ai_hsv = det.get("hsv", None)
-                                else:
-                                    ai_hsv = getattr(det, "hsv", None)
-                            except Exception:
-                                ai_hsv = None
-                            ai_hsv_text = ""
-                            if isinstance(ai_hsv, (list, tuple)) and len(ai_hsv) >= 3:
-                                try:
-                                    ah, as_, av = int(ai_hsv[0]), int(ai_hsv[1]), int(ai_hsv[2])
-                                    ai_hsv_text = f" AIHSV({ah},{as_},{av})"
-                                except Exception:
-                                    ai_hsv_text = ""
-                            print(
-                                f"[GPT] #{idx} raw=({x_val},{y_val},{r_val}) norm(xy={norm_xy},r={norm_r}) "
-                                f"-> px=({x},{y},{int(round(r))}) {d_text}px HSV({H},{S},{V}){ai_hsv_text} score:{score_f:.2f}"
-                            )
-                    # Update AI histogram window with best (highest-score) detection
-                    if src_frame is not None and host._ai_detections:
-                        try:
-                            h_ai, w_ai = src_frame.shape[:2]
-                        except Exception:
-                            h_ai, w_ai = 0, 0
-                        best_det = None
-                        best_score = -1.0
-                        for det in host._ai_detections:
-                            try:
-                                if isinstance(det, dict):
-                                    x_val = det.get("x", 0)
-                                    y_val = det.get("y", 0)
-                                    r_val = det.get("r", 0)
-                                    score_val = det.get("score", 0.0)
-                                else:
-                                    x_val = getattr(det, "x", 0)
-                                    y_val = getattr(det, "y", 0)
-                                    r_val = getattr(det, "r", 0)
-                                    score_val = getattr(det, "score", 0.0)
-                                x_f = float(x_val)
-                                y_f = float(y_val)
-                                r_f = float(r_val)
-                                if 0 < x_f <= 1.0 and 0 < y_f <= 1.0 and w_ai > 1 and h_ai > 1:
-                                    x_f *= w_ai
-                                    y_f *= h_ai
-                                if 0 < r_f <= 1.0 and min(w_ai, h_ai) > 1:
-                                    r_f *= min(w_ai, h_ai)
-                                score_f = float(score_val)
-                            except Exception:
-                                continue
-                            if score_f >= best_score:
-                                best_score = score_f
-                                best_det = (x_f, y_f, r_f)
-                        if best_det is not None:
-                            # Shared histogram window used by all object detection test modes
-                            try:
-                                model_label = str(getattr(host.ai_detector, "model", "") or "").strip()
-                            except Exception:
-                                model_label = ""
-                            x_b, y_b, r_b = best_det
-                            host.ai_vision.maybe_update_test_hist(
-                                "GPT Vision",
-                                src_frame,
-                                (x_b, y_b),
-                                float(r_b or 0.0),
-                                model_label=model_label,
-                                interval_s=0.0,
-                            )
-                    if host.ai_detector.last_error:
-                        host.ai_vision.disable_due_to_error(host.ai_detector.last_error)
-                except Exception as e:
-                    host._ai_detections = []
-                    print(f"[GPT][WARN] GPT Vision failed in pipeline: {e}")
-                    host.ai_vision.disable_due_to_error(str(e) or "AI Vision pipeline exception")
-                host._ai_last_ts = now_ai
-                host._ai_request_sent = True
-                if host.ai_one_shot_mode:
-                    # Disarm so we do not call API again until next click.
-                    host._ai_one_shot_pending = False
+            abort_frame = self._run_ai_vision_pipeline(frame)
 
-            if host._ai_detections:
-                # Draw on main color frame
-                host.overlay.draw_ai_detections(frame, host._ai_detections, ai_detector=host.ai_detector)
+        return frame, mask, abort_frame
 
-            # Beep every 3 seconds while AI Vision mode is ON (no LED flash)
-            # Disabled for one-shot trial mode to avoid annoying repeats.
-            if not host.ai_one_shot_mode:
+    def _run_ai_vision_pipeline(self, frame) -> bool:
+        host = self._host
+        now_ai = time.time()
+        # In one-shot mode, only call the API when a click has armed a request.
+        if host.ai_one_shot_mode and not bool(getattr(host, "_ai_one_shot_pending", False)):
+            # Still allow drawing of last detections, but do not call API.
+            pass
+        elif not bool(getattr(host, "_ai_request_sent", False)):
+            try:
+                print("[GPT] Sending frame to vision model...")
+                src_frame = host.last_display_frame_bgr if host.last_display_frame_bgr is not None else frame
                 try:
-                    now_beep = time.time()
-                    last_beep = float(getattr(host, "_ai_beep_last_ts", 0.0) or 0.0)
-                    if (now_beep - last_beep) >= 3.0:
-                        host._beep_pattern(beeps=1, on_s=0.08, off_s=0.00)
-                        host._ai_beep_last_ts = now_beep
+                    h_src, w_src = src_frame.shape[:2]
+                    src_tag = "last_display_frame" if host.last_display_frame_bgr is not None else "current_frame"
+                    print(f"[GPT] Frame source: {src_tag} size={w_src}x{h_src}")
                 except Exception:
                     pass
+                host._ai_detections = host.ai_detector.analyze(src_frame)
+                print(
+                    f"[GPT] Response: {len(host._ai_detections)} candidates"
+                    + (f" (latency {host.ai_detector.last_latency_s:.2f}s)" if host.ai_detector.last_latency_s else "")
+                )
+                if host.ai_detector.last_error:
+                    host.ai_vision.disable_due_to_error(host.ai_detector.last_error)
+                    host._ai_last_ts = now_ai
+                    host._ai_request_sent = True
+                    return True
+                # Inform user if AI returned no candidates
+                if not host._ai_detections:
+                    host.ai_vision.set_status("GPT Vision: no ball detected (0 candidates)")
+                else:
+                    # Clear stale status on success; filtering may set a new one below.
+                    host._ai_status_msg = ""
+                    host._ai_status_ts = 0.0
+                raw_text = getattr(host.ai_detector, "last_raw_text", None)
+                if raw_text:
+                    print("[GPT] Raw response:\n" + str(raw_text))
+                # Post-filter detections by score + HSV (to reduce false positives)
+                # Disabled in one-shot trial mode: show whatever the model returned.
+                if (not host.ai_one_shot_mode) and src_frame is not None and host._ai_detections:
+                    try:
+                        hsv_img = cv2.cvtColor(src_frame, cv2.COLOR_BGR2HSV)
+                    except Exception:
+                        hsv_img = None
+                    h_ai, w_ai = src_frame.shape[:2]
+                    filtered = []
+                    rejected_hue = 0
+                    rejected_sv = 0
+                    rejected_score = 0
+                    for idx, det in enumerate(host._ai_detections, start=1):
+                        try:
+                            if isinstance(det, dict):
+                                x_val = det.get("x", 0)
+                                y_val = det.get("y", 0)
+                                r_val = det.get("r", 0)
+                                score_val = det.get("score", 0.0)
+                            else:
+                                x_val = getattr(det, "x", 0)
+                                y_val = getattr(det, "y", 0)
+                                r_val = getattr(det, "r", 0)
+                                score_val = getattr(det, "score", 0.0)
+                            x_f = float(x_val)
+                            y_f = float(y_val)
+                            r_f = float(r_val)
+                            if 0 < x_f <= 1.0 and 0 < y_f <= 1.0 and w_ai > 1 and h_ai > 1:
+                                x_f *= w_ai
+                                y_f *= h_ai
+                            if 0 < r_f <= 1.0 and min(w_ai, h_ai) > 1:
+                                r_f *= min(w_ai, h_ai)
+                            x = int(round(x_f))
+                            y = int(round(y_f))
+                            r = float(r_f)
+                        except Exception:
+                            continue
+                        try:
+                            score_f = float(score_val)
+                        except Exception:
+                            score_f = 0.0
+                        if score_f < float(getattr(host, "ai_score_min", 0.0)):
+                            rejected_score += 1
+                            continue
+                        if (
+                            host.ai_hsv_filter_enabled
+                            and hsv_img is not None
+                            and 0 <= x < w_ai
+                            and 0 <= y < h_ai
+                        ):
+                            try:
+                                H, S, V = [int(v) for v in hsv_img[y, x]]
+                            except Exception:
+                                H, S, V = 0, 0, 0
+                            min_s = int(getattr(host, "ai_min_s", 0))
+                            min_v = int(getattr(host, "ai_min_v", 0))
+                            if S < min_s or V < min_v:
+                                print(f"[GPT] Reject #{idx}@({x},{y}): HSV({H},{S},{V}) - S<{min_s} or V<{min_v}")
+                                rejected_sv += 1
+                                continue
+                            ok_h = False
+                            for lo, hi in getattr(host, "ai_hue_ranges", [(0, 179)]):
+                                if int(lo) <= H <= int(hi):
+                                    ok_h = True
+                                    break
+                            if not ok_h:
+                                print(f"[GPT] Reject #{idx}@({x},{y}): HSV({H},{S},{V}) - Hue not in {host.ai_hue_ranges}")
+                                rejected_hue += 1
+                                continue
+                        filtered.append(det)
+                    if filtered:
+                        print(f"[GPT] Filtered: {len(filtered)}/{len(host._ai_detections)} kept")
+                        host._ai_status_msg = ""
+                        host._ai_status_ts = 0.0
+                    else:
+                        print("[GPT] Filtered: 0 kept")
+                        # Surface why on the Color window
+                        if host.ai_hsv_filter_enabled and (rejected_hue or rejected_sv):
+                            why = []
+                            if rejected_hue:
+                                why.append("Hue")
+                            if rejected_sv:
+                                why.append("S/V")
+                            why_s = "+".join(why) if why else "HSV"
+                            host.ai_vision.set_status(f"GPT Vision: rejected by {why_s} filter (try disabling GPT HSV filter)")
+                        elif rejected_score:
+                            host.ai_vision.set_status("GPT Vision: rejected by score filter")
+                        else:
+                            host.ai_vision.set_status("GPT Vision: 0 kept after filtering")
+                    host._ai_detections = filtered
+                # Auto-calibrate HSV ranges from the best AI detection
+                if (not host.ai_one_shot_mode) and src_frame is not None and host._ai_detections:
+                    try:
+                        best_det = max(
+                            host._ai_detections,
+                            key=lambda d: float(d.get("score", 0.0)) if isinstance(d, dict) else float(getattr(d, "score", 0.0)),
+                        )
+                    except Exception:
+                        best_det = host._ai_detections[0]
+                    host.ai_vision.auto_calibrate_hsv_from_ai(src_frame, best_det)
+                # Refine AI circles using HSV mask within ROI
+                if (not host.ai_one_shot_mode) and src_frame is not None and host._ai_detections and host.ai_refine_enabled:
+                    refined = []
+                    for det in host._ai_detections:
+                        refined.append(host.ai_vision.refine_ai_circle(src_frame, det))
+                    host._ai_detections = refined
+                # Log candidate info: diameter, center HSV, and (x,y)
+                if src_frame is not None and host._ai_detections:
+                    try:
+                        hsv_img = cv2.cvtColor(src_frame, cv2.COLOR_BGR2HSV)
+                    except Exception:
+                        hsv_img = None
+                    h_ai, w_ai = src_frame.shape[:2]
+                    for idx, det in enumerate(host._ai_detections, start=1):
+                        try:
+                            if isinstance(det, dict):
+                                x_val = det.get("x", 0)
+                                y_val = det.get("y", 0)
+                                r_val = det.get("r", 0)
+                                score_val = det.get("score", 0.0)
+                            else:
+                                x_val = getattr(det, "x", 0)
+                                y_val = getattr(det, "y", 0)
+                                r_val = getattr(det, "r", 0)
+                                score_val = getattr(det, "score", 0.0)
+                            x_f = float(x_val)
+                            y_f = float(y_val)
+                            r_f = float(r_val)
+                            if 0 < x_f <= 1.0 and 0 < y_f <= 1.0 and w_ai > 1 and h_ai > 1:
+                                x_f *= w_ai
+                                y_f *= h_ai
+                            if 0 < r_f <= 1.0 and min(w_ai, h_ai) > 1:
+                                r_f *= min(w_ai, h_ai)
+                            x = int(round(x_f))
+                            y = int(round(y_f))
+                            r = float(r_f)
+                            norm_xy = bool(0 < float(x_val) <= 1.0 and 0 < float(y_val) <= 1.0)
+                            norm_r = bool(0 < float(r_val) <= 1.0)
+                        except Exception:
+                            print(f"[AI] #{idx} raw: {det}")
+                            continue
+                        x = max(0, min(w_ai - 1, x))
+                        y = max(0, min(h_ai - 1, y))
+                        d_text = "D?" if r <= 0 else f"D{int(round(2 * r))}"
+                        H = S = V = 0
+                        if hsv_img is not None:
+                            try:
+                                H, S, V = [int(v) for v in hsv_img[y, x]]
+                            except Exception:
+                                H, S, V = 0, 0, 0
+                        try:
+                            score_f = float(score_val)
+                        except Exception:
+                            score_f = 0.0
+                        ai_hsv = None
+                        try:
+                            if isinstance(det, dict):
+                                ai_hsv = det.get("hsv", None)
+                            else:
+                                ai_hsv = getattr(det, "hsv", None)
+                        except Exception:
+                            ai_hsv = None
+                        ai_hsv_text = ""
+                        if isinstance(ai_hsv, (list, tuple)) and len(ai_hsv) >= 3:
+                            try:
+                                ah, as_, av = int(ai_hsv[0]), int(ai_hsv[1]), int(ai_hsv[2])
+                                ai_hsv_text = f" AIHSV({ah},{as_},{av})"
+                            except Exception:
+                                ai_hsv_text = ""
+                        print(
+                            f"[GPT] #{idx} raw=({x_val},{y_val},{r_val}) norm(xy={norm_xy},r={norm_r}) "
+                            f"-> px=({x},{y},{int(round(r))}) {d_text}px HSV({H},{S},{V}){ai_hsv_text} score:{score_f:.2f}"
+                        )
+                # Update AI histogram window with best (highest-score) detection
+                if src_frame is not None and host._ai_detections:
+                    try:
+                        h_ai, w_ai = src_frame.shape[:2]
+                    except Exception:
+                        h_ai, w_ai = 0, 0
+                    best_det = None
+                    best_score = -1.0
+                    for det in host._ai_detections:
+                        try:
+                            if isinstance(det, dict):
+                                x_val = det.get("x", 0)
+                                y_val = det.get("y", 0)
+                                r_val = det.get("r", 0)
+                                score_val = det.get("score", 0.0)
+                            else:
+                                x_val = getattr(det, "x", 0)
+                                y_val = getattr(det, "y", 0)
+                                r_val = getattr(det, "r", 0)
+                                score_val = getattr(det, "score", 0.0)
+                            x_f = float(x_val)
+                            y_f = float(y_val)
+                            r_f = float(r_val)
+                            if 0 < x_f <= 1.0 and 0 < y_f <= 1.0 and w_ai > 1 and h_ai > 1:
+                                x_f *= w_ai
+                                y_f *= h_ai
+                            if 0 < r_f <= 1.0 and min(w_ai, h_ai) > 1:
+                                r_f *= min(w_ai, h_ai)
+                            score_f = float(score_val)
+                        except Exception:
+                            continue
+                        if score_f >= best_score:
+                            best_score = score_f
+                            best_det = (x_f, y_f, r_f)
+                    if best_det is not None:
+                        # Shared histogram window used by all object detection test modes
+                        try:
+                            model_label = str(getattr(host.ai_detector, "model", "") or "").strip()
+                        except Exception:
+                            model_label = ""
+                        x_b, y_b, r_b = best_det
+                        host.ai_vision.maybe_update_test_hist(
+                            "GPT Vision",
+                            src_frame,
+                            (x_b, y_b),
+                            float(r_b or 0.0),
+                            model_label=model_label,
+                            interval_s=0.0,
+                        )
+                if host.ai_detector.last_error:
+                    host.ai_vision.disable_due_to_error(host.ai_detector.last_error)
+            except Exception as e:
+                host._ai_detections = []
+                print(f"[GPT][WARN] GPT Vision failed in pipeline: {e}")
+                host.ai_vision.disable_due_to_error(str(e) or "AI Vision pipeline exception")
+            host._ai_last_ts = now_ai
+            host._ai_request_sent = True
+            if host.ai_one_shot_mode:
+                # Disarm so we do not call API again until next click.
+                host._ai_one_shot_pending = False
+
+        if host._ai_detections:
+            # Draw on main color frame
+            host.overlay.draw_ai_detections(frame, host._ai_detections, ai_detector=host.ai_detector)
+
+        # Beep every 3 seconds while AI Vision mode is ON (no LED flash)
+        # Disabled for one-shot trial mode to avoid annoying repeats.
+        if not host.ai_one_shot_mode:
+            try:
+                now_beep = time.time()
+                last_beep = float(getattr(host, "_ai_beep_last_ts", 0.0) or 0.0)
+                if (now_beep - last_beep) >= 3.0:
+                    host._beep_pattern(beeps=1, on_s=0.08, off_s=0.00)
+                    host._ai_beep_last_ts = now_beep
+            except Exception:
+                pass
+
+        return False
+
+    def _apply_overlays(self, frame, mask):
+        host = self._host
 
         #------- Update Mask window if open -------
         host.mask_picker.update_mask_window(host.last_display_frame_bgr, mask)
@@ -573,8 +605,6 @@ class FrameUpdateController:
         if bool(getattr(host, "_bark_active", False)) and not host._bark_should_run():
             host._stop_barking()
             host._set_mask_cheer("", visible=False)
-    
-        #----------------------
 
         # Always-on CV histogram panels (picker/frame + top-ranked contours)
         try:
@@ -582,7 +612,6 @@ class FrameUpdateController:
             host._maybe_update_cv_hist(src_hist)
         except Exception:
             pass
-
 
         # ----------------------------------
         # Convert to RGB for Qt display
@@ -718,366 +747,24 @@ class FrameUpdateController:
             thickness,
         )
 
-        # Telemetry overlay (top-right)
-        dog_online = (
-            host.dog_client is not None
-            and getattr(host.dog_client, "tcp_flag", False)
-            and host.server_control_ok
+        # Telemetry/status/FPS overlays
+        self.status_overlay.draw(
+            frame_rgb,
+            frame,
+            w=w,
+            h=h,
+            font=font,
+            scale=scale,
+            thickness=thickness,
+            y_hint_start=55,
         )
 
-        # GPT Vision overlay hint (top-left, under IP/ports)
-        ai_err = str(getattr(host, "_ai_last_error_msg", "") or "").strip()
-        if host.ai_vision_enabled:
-            if bool(getattr(host, "ai_one_shot_mode", False)):
-                pending = bool(getattr(host, "_ai_one_shot_pending", False))
-                hint = "GPT Vision: SNAPSHOT (requesting...)" if pending else "GPT Vision: SNAPSHOT (press button again to clear)"
-            else:
-                hint = "GPT Vision: ON (press button again to clear)"
-            cv2.putText(
-                frame_rgb,
-                hint,
-                (10, 55),
-                font,
-                scale,
-                (0, 255, 255),
-                thickness,
-            )
-            # Show a short status hint when AI returns nothing or is filtered out
-            try:
-                ai_status = str(getattr(host, "_ai_status_msg", "") or "").strip()
-                ai_until = float(getattr(host, "_ai_status_ts", 0.0) or 0.0)
-            except Exception:
-                ai_status = ""
-                ai_until = 0.0
-            if (not ai_err) and ai_status and (time.time() <= ai_until):
-                cv2.putText(
-                    frame_rgb,
-                    ai_status,
-                    (10, 75),
-                    font,
-                    scale,
-                    (255, 255, 0),
-                    thickness,
-                )
+        return frame_rgb
 
-            # Show GPT model name used for detections
-            try:
-                model_label = str(getattr(host.ai_detector, "model", "") or "").strip()
-            except Exception:
-                model_label = ""
-            if model_label:
-                cv2.putText(
-                    frame_rgb,
-                    f"GPT model: {model_label}",
-                    (10, 95),
-                    font,
-                    scale,
-                    (0, 255, 255),
-                    thickness,
-                )
-            # Reference center mark '+' for AI Vision
-            cx_ai = int(round(w / 2))
-            cy_ai = int(round(h / 2))
-            cross = 8
-            cv2.line(frame_rgb, (cx_ai - cross, cy_ai), (cx_ai + cross, cy_ai), (0, 255, 255), 1)
-            cv2.line(frame_rgb, (cx_ai, cy_ai - cross), (cx_ai, cy_ai + cross), (0, 255, 255), 1)
-        # CV Ball / Yolo Vision hints (avoid overlapping GPT hint lines)
-        y_hint = 55
-        if host.ai_vision_enabled:
-            y_hint = 115
-        if bool(getattr(host, "cv_ball_enabled", False)):
-            try:
-                cv_int = float(getattr(host, "cv_ball_interval_s", 1.0) or 1.0)
-            except Exception:
-                cv_int = 1.0
-            cv_hz = (1.0 / cv_int) if cv_int > 0 else 0.0
-            try:
-                cv_n = int(getattr(host, "_cv_update_count", 0) or 0)
-            except Exception:
-                cv_n = 0
-            try:
-                cv_det_n = int(getattr(host, "_cv_detect_count", 0) or 0)
-            except Exception:
-                cv_det_n = 0
-            cv2.putText(
-                frame_rgb,
-                f"CV Ball: ON #{cv_n} @ {cv_hz:.1f}Hz, Detected #{cv_det_n}",
-                (10, y_hint),
-                font,
-                scale,
-                (255, 255, 0),
-                thickness,
-            )
-            y_hint += 20
-            try:
-                cv_status = str(getattr(host, "_cv_last_status", "") or "").strip()
-            except Exception:
-                cv_status = ""
-            if cv_status:
-                cv_status_text = f"Status={cv_status}"
-                cv_status_color = (0, 255, 0) if "Detected" in cv_status else (0, 0, 255)
-                cv2.putText(
-                    frame_rgb,
-                    cv_status_text,
-                    (10, y_hint),
-                    font,
-                    scale,
-                    (0, 0, 0),
-                    thickness + 2,
-                )
-                cv2.putText(
-                    frame_rgb,
-                    cv_status_text,
-                    (10, y_hint),
-                    font,
-                    scale,
-                    cv_status_color,
-                    thickness,
-                )
-                y_hint += 20
-        if bool(getattr(host, "yolo_vision_enabled", False)):
-            yolo_err2 = str(getattr(host, "_yolo_last_error_msg", "") or "").strip()
-            try:
-                y_int = float(getattr(host, "yolo_vision_interval_s", 1.0) or 1.0)
-            except Exception:
-                y_int = 1.0
-            y_hz = (1.0 / y_int) if y_int > 0 else 0.0
-            try:
-                y_conf = float(getattr(getattr(host, "yolo_detector", None), "conf", 0.0) or 0.0)
-            except Exception:
-                y_conf = 0.0
-            y_conf_text = f", Conf >= {y_conf:.2f}" if y_conf > 0 else ""
-            try:
-                y_n = int(getattr(host, "_yolo_update_count", 0) or 0)
-            except Exception:
-                y_n = 0
-            if yolo_err2:
-                cv2.putText(
-                    frame_rgb,
-                    f"Yolo Vision #{y_n} @ {y_hz:.1f}Hz{y_conf_text}: {yolo_err2}",
-                    (10, y_hint),
-                    font,
-                    scale,
-                    (0, 165, 255),
-                    thickness,
-                )
-            else:
-                yolo_n2 = len(getattr(host, "_yolo_detections", []) or [])
-                cv2.putText(
-                    frame_rgb,
-                    f"Yolo Vision: {yolo_n2} boxes #{y_n} @ {y_hz:.1f}Hz{y_conf_text}",
-                    (10, y_hint),
-                    font,
-                    scale,
-                    (0, 255, 0),
-                    thickness,
-                )
-            y_hint += 20
-            try:
-                model_path = str(getattr(getattr(host, "yolo_detector", None), "model_path", "") or "")
-                if model_path:
-                    cv2.putText(
-                        frame_rgb,
-                        f"YOLO model: {os.path.basename(model_path)}",
-                        (10, y_hint),
-                        font,
-                        scale,
-                        (180, 220, 255),
-                        thickness,
-                    )
-                    y_hint += 20
-            except Exception:
-                pass
+    def _render_frame(self, frame_rgb):
+        host = self._host
+        h, w, ch = frame_rgb.shape
 
-        # YOLO Ball Training overlay
-        if bool(getattr(host, "yolo_training_enabled", False)):
-            try:
-                ds_label = str(getattr(host, "_yolo_training_dataset_label", "") or "")
-            except Exception:
-                ds_label = ""
-            try:
-                cur = int(getattr(host, "yolo_training_count", 0) or 0)
-            except Exception:
-                cur = 0
-            tgt = int(getattr(host, "yolo_training_target", 256) or 256)
-            msg = f"YOLO datasets creating...  #{cur}/{tgt} {ds_label}".strip()
-            cv2.putText(frame_rgb, msg, (10, y_hint), font, scale, (0, 0, 0), thickness + 2)
-            cv2.putText(frame_rgb, msg, (10, y_hint), font, scale, (180, 80, 255), thickness)
-            y_hint += 20
-            try:
-                prompt = str(getattr(host, "_yolo_training_status_msg", "") or "").strip()
-            except Exception:
-                prompt = ""
-            if prompt:
-                cv2.putText(frame_rgb, prompt, (10, y_hint), font, scale, (0, 0, 0), thickness + 2)
-                cv2.putText(frame_rgb, prompt, (10, y_hint), font, scale, (255, 255, 255), thickness)
-                y_hint += 20
-
-        elif ai_err:
-            cv2.putText(
-                frame_rgb,
-                "GPT Vision: OFF (error)",
-                (10, 55),
-                font,
-                scale,
-                (0, 0, 255),
-                thickness,
-            )
-
-        # Ball tracking status overlay (Color window)
-        try:
-            status_y = y_hint + 10
-            if bool(getattr(host, "ball_mode_enabled", False)) and bool(getattr(host, "_ball_close_enough", False)):
-                msg = "Ball is Close Enough"
-                cv2.putText(frame_rgb, msg, (10, status_y), font, 0.7, (0, 0, 0), 4)
-                cv2.putText(frame_rgb, msg, (10, status_y), font, 0.7, (0, 255, 0), 2)
-            else:
-                cmd_name = str(getattr(host, "_body_cmd_name", "") or "").strip()
-                if cmd_name:
-                    msg = f"Move: {cmd_name}"
-                    cv2.putText(frame_rgb, msg, (10, status_y), font, 0.55, (0, 0, 0), 3)
-                    cv2.putText(frame_rgb, msg, (10, status_y), font, 0.55, (255, 255, 0), 1)
-                elif bool(getattr(host, "_ball_locked", False)):
-                    source = str(getattr(host, "_ball_lock_source", "") or "")
-                    if source.upper() == "YOLO":
-                        msg = "Ball Detected by Yolo"
-                    elif source.upper() == "CV":
-                        msg = "Ball Lock by CV"
-                    elif source:
-                        msg = f"Ball LOCK ({source})"
-                    else:
-                        msg = "Ball LOCK"
-                    cv2.putText(frame_rgb, msg, (10, status_y), font, 0.55, (0, 0, 0), 3)
-                    cv2.putText(frame_rgb, msg, (10, status_y), font, 0.55, (0, 255, 255), 1)
-        except Exception:
-            pass
-
-
-        # Strong warning overlay if API access failed (show even if GPT is off)
-        if ai_err:
-            warn1 = "GPT VISION ERROR: API ACCESS FAILED"
-            warn2 = f"Reason: {ai_err}"
-            cv2.putText(frame_rgb, warn1, (10, 75), font, scale, (0, 0, 255), thickness + 1)
-            cv2.putText(frame_rgb, warn1, (10, 75), font, scale, (255, 255, 255), thickness)
-            cv2.putText(frame_rgb, warn2, (10, 90), font, scale, (0, 0, 255), thickness + 1)
-            cv2.putText(frame_rgb, warn2, (10, 90), font, scale, (255, 255, 255), thickness)
-
-        if dog_online and host.telemetry_valid:
-            dist_text = f"{host.distance_cm:.1f}cm"
-            volt_text = f"{host.battery_v:.2f}V"
-        else:
-            dist_text = "--.-cm"
-            volt_text = "-.--V"
-
-        rx_text = f"RX:{host.rx_fps:.1f}fps"
-        ui_text = f"UI:{host.display_fps:.1f}fps"
-
-        gap = 8
-        (dist_size, _) = cv2.getTextSize(dist_text, font, scale, thickness)
-        (volt_size, _) = cv2.getTextSize(volt_text, font, scale, thickness)
-        (rx_size, _) = cv2.getTextSize(rx_text, font, scale, thickness)
-        (ui_size, _) = cv2.getTextSize(ui_text, font, scale, thickness)
-
-        total_width = (
-            dist_size[0] + volt_size[0] + rx_size[0] + ui_size[0] + 3 * gap
-        )
-        start_x = w - total_width - 10
-        y_top = 15
-        x = start_x
-
-        def put_text_with_outline(img, text, org, color):
-            cv2.putText(
-                img,
-                text,
-                (org[0] + 1, org[1] + 1),
-                font,
-                scale,
-                (0, 0, 0),
-                thickness + 1,
-            )
-            cv2.putText(
-                img,
-                text,
-                org,
-                font,
-                scale,
-                color,
-                thickness,
-            )
-
-        # Distance: bright yellow with outline
-        put_text_with_outline(frame_rgb, dist_text, (x, y_top), (0, 255, 255))
-        x += dist_size[0] + gap
-
-        # Voltage
-        put_text_with_outline(frame_rgb, volt_text, (x, y_top), (0, 165, 255))
-        x += volt_size[0] + gap
-
-        # RX FPS (actual Dog frame rate)
-        put_text_with_outline(frame_rgb, rx_text, (x, y_top), (255, 0, 255))
-        x += rx_size[0] + gap
-
-        # UI FPS (Qt draw rate)
-        put_text_with_outline(frame_rgb, ui_text, (x, y_top), (0, 255, 0))
-
-        # Shared picker sample point bottom-left
-        if host.ball_tracker.sample_point is not None and host.last_display_frame_bgr is not None:
-            sx, sy = host.ball_tracker.sample_point
-            hsv_img = cv2.cvtColor(host.last_display_frame_bgr, cv2.COLOR_BGR2HSV)  # <-- ALWAYS use raw color frame
-            h_img, w_img = hsv_img.shape[:2]  # <-- ADD THIS LINE           
-            sx = max(0, min(w_img - 1, sx))
-            sy = max(0, min(h_img - 1, sy))            
-            Hs, Ss, Vs = [int(v) for v in hsv_img[sy, sx]]      # Get HSV at sample point ==> error to be fixed, out of bounds for axis 0 with size 480
-            host.ball_tracker.sample_hsv = (Hs, Ss, Vs)
-            
-            # ... draw HUD ...
-            cv2.circle(frame_rgb, (sx, sy), 2, (100, 255, 0), -1)   # small (size=2) filled circle (-1) at mouse click point
-            text1 = f"HSV({Hs},{Ss},{Vs})"
-            text2 = f"({sx},{sy})"
-            put_text_with_outline(frame_rgb, text1, (5, h - 28), (100, 255, 0))  # left-bottom corner
-            put_text_with_outline(frame_rgb, text2, (5, h - 12), (100, 255, 0))
-
-            # Update the mask window HUD/histogram if visible, using RAW color frame
-            if host.last_display_frame_bgr is not None:
-                _, mask2 = host.ball_tracker.compute_mask(host.last_display_frame_bgr)
-                host.mask_picker.update_mask_window(host.last_display_frame_bgr, mask2)
-
-        # Ball center HSV info (NEW PATCH)
-        if host.ball_mode_enabled and host.ball_tracker.last_center is not None:
-            #print(f"[DEBUG] Drawing ball center overlay: last_center={host.ball_tracker.last_center}")
-            bx, by = host.ball_tracker.last_center
-            bx = int(bx)
-            by = int(by)
-            if 0 <= bx < frame_rgb.shape[1] and 0 <= by < frame_rgb.shape[0]:
-                hsv_img = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-                Hc, Sc, Vc = [int(v) for v in hsv_img[by, bx]]
-                #print(f"[DEBUG] Drawing circle at ({bx},{by}), HSV=({Hc},{Sc},{Vc}), radius=4")
-                cv2.circle(frame_rgb, (bx, by), 4, (255, 255, 0), -1)
-                text_ball = f"Ball HSV({Hc},{Sc},{Vc})"
-                put_text_with_outline(frame_rgb, text_ball, (bx + 8, by - 12), (255, 255, 0))
-
-        # Hover HSV info (cursor-based) – does NOT move the picker
-        if host.hover_xy_color is not None and host.hover_hsv_color is not None:
-            cx, cy = host.hover_xy_color
-            Hh, Sh, Vh = host.hover_hsv_color
-
-            text1 = f"HSV({Hh},{Sh},{Vh})"
-            text2 = f"({cx},{cy})"
-            head_angle = getattr(host.head_tracker, "current_angle", None)
-            text3 = (
-                f"head {head_angle:.2f}d" if isinstance(head_angle, (int, float)) else "head --"
-            )
-
-            # Draw near the cursor, similar to mask window
-            base_x = cx + 8
-            base_y = max(15, cy - 12)
-
-            # Use a bright yellow-ish color for hover
-            put_text_with_outline(frame_rgb, text1, (base_x, base_y),     (255, 255, 0))
-            put_text_with_outline(frame_rgb, text2, (base_x, base_y + 14), (255, 255, 0))
-            put_text_with_outline(frame_rgb, text3, (base_x, base_y + 28), (255, 255, 0))
-
-        # ----------------------------------
         # Convert to QPixmap
         bytes_per_line = ch * w
         qimg = QImage(frame_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)

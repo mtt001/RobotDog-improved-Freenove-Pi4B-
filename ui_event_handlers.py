@@ -17,8 +17,6 @@
 
 from __future__ import annotations
 
-import time
-
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QApplication
 
@@ -31,111 +29,10 @@ class UIEventHandlersController:
         self._host = host
 
     def update_status_ui(self):
-        """Update bottom-bar HTML text and Dog Video button label/color."""
-        host = self._host
-
-        def color(ok: bool) -> str:
-            return "#00ff44" if ok else "#ff4444"
-
-        # Video port color: yellow if STALL, otherwise green/red
-        if host.video_stall and host.use_dog_video:
-            video_color = "#ffff00"
-            video_text = f"Video:{host.video_port}(STALL)"
-        else:
-            video_color = "#00ff44" if host.server_video_ok else "#ff4444"
-            video_text = f"Video:{host.video_port}"
-
-        all_ok = (
-            host.server_ip_ok
-            and host.server_video_ok
-            and host.server_control_ok
-            and not (host.video_stall and host.use_dog_video)
-        )
-
-        html = (
-            f"<span style='color:{color(host.server_ip_ok)}'>"
-            f"IP {host.ip}</span>  |  "
-            f"<span style='color:{video_color}'>{video_text}</span>  |  "
-            f"<span style='color:{color(host.server_control_ok)}'>"
-            f"Ctrl:{host.control_port}</span>"
-        )
-        host.status_detail_label.setText(html)
-
-        if host.use_dog_video:
-            btn_text = "Switch to\nClient Mac Video"
-            btn_color = "#00ff44"
-        else:
-            if all_ok:
-                btn_text = "Dog Video\nReady"
-                btn_color = "#00ff44"
-            else:
-                btn_text = "Dog Video\nNOT Ready"
-                btn_color = "#ff4444"
-
-        host.dog_button.setText(btn_text)
-        host.dog_button.setStyleSheet(
-            f"font-size:16px; padding:10px; background-color:white; color:{btn_color};"
-        )
+        return self._host.status_ui.update_status_ui()
 
     def try_reconnect(self):
-        """
-        Dog Video button:
-          - Dog→Mac: switch to Mac camera only.
-          - Mac→Dog: probe IP/ports, then start Dog client if OK.
-        """
-        host = self._host
-        if host.reconnect_in_progress:
-            print("[RECONNECT] Already in progress.")
-            return
-        host.reconnect_in_progress = True
-
-        if host.use_dog_video:
-            print("[RECONNECT] Dog→Mac.")
-            host.use_dog_video = False
-            host.shutdown_dog_client()
-            host.server_video_ok = False
-            host.server_control_ok = False
-            host.video_stall = False
-            host.update_status_ui()
-            host.reconnect_in_progress = False
-            return
-
-        print("[RECONNECT] Mac→Dog.")
-        host.last_dog_frame = None
-        host.dog_last_frame_time = None
-        host.dog_has_recent_frame = False
-        host.video_stall = False
-
-        # Reset FPS counters
-        host.display_fps = 0.0
-        host.display_frame_count = 0
-        host.display_last_time = time.time()
-        host.rx_fps = 0.0
-        host.rx_frame_count = 0
-        host.rx_last_time = time.time()
-
-        ip_ok = host.ping_ip(host.ip)
-        ctrl_ok = host.test_tcp_port(host.ip, host.control_port)
-
-        host.server_ip_ok = ip_ok
-        host.server_control_ok = ctrl_ok
-
-        if not (ip_ok and ctrl_ok):
-            print("[RECONNECT] Dog NOT ready (IP/ctrl fail).")
-            host.server_video_ok = False
-            host.use_dog_video = False
-            host.update_status_ui()
-            host.reconnect_in_progress = False
-            return
-
-        print("[RECONNECT] Dog reachable → start Dog client.")
-        host.start_dog_client()
-        host.use_dog_video = True
-        host.server_video_ok = True
-        host.video_stall = False
-        host.update_status_ui()
-        host.reconnect_in_progress = False
-        host.schedule_dog_entry_beep()
+        return self._host.server_reconnect.try_reconnect()
 
     def handle_ball_button(self):
         """
@@ -829,11 +726,9 @@ class UIEventHandlersController:
         # Save calibration one last time
         host.ball_tracker.save_default_config()
 
-        host.stop_server_check = True
         host.stop_cmd_thread = True
 
-        if getattr(host, "server_check_thread", None) is not None:
-            host.server_check_thread.join(timeout=1.0)
+        host.server_reconnect.stop_server_check_thread()
 
         if getattr(host, "telemetry_timer", None) is not None:
             host.telemetry_timer.stop()

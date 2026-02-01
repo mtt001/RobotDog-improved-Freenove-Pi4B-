@@ -10,6 +10,8 @@
      CV histogram + debug window controller extracted from mtDogMain.py.
      Preserves CV debug and histogram window behavior.
 
+ v1.01  (2026-01-31 21:40)    : Typing compatibility fix
+     • Replace instance attribute annotations with type comments.
  v1.00  (2026-01-31 18:40)    : Initial CV hist/debug controller extraction
      • Move CV histogram + debug window update logic out of mtDogMain.py.
 ===============================================================================
@@ -29,11 +31,11 @@ class CVHistDebugController:
         # Always-on CV histogram window
         self._host.cv_hist_interval_s = 0.5
         self._host._cv_hist_last_ts = 0.0
-        self._host.cv_hist_window: CVBallHistogramWindow | None = None
+        self._host.cv_hist_window = None
         self._host._cv_ball_last_ranked_masks = []
         self._host._cv_ball_last_roi_rect = None
         self._host._cv_hist_positioned = False
-        self._host.cv_debug_window: CVBallDebugWindow | None = None
+        self._host.cv_debug_window = None
 
     def position_cv_hist_window(self):
         host = self._host

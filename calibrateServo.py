@@ -46,10 +46,40 @@ import time
 import math
 import os
 import signal
-from Servo import Servo
-from Buzzer import Buzzer
-from Led import Led
-from Command import COMMAND as cmd
+
+try:
+    from Servo import Servo  # type: ignore[reportMissingImports]
+except Exception:
+    class Servo:  # type: ignore
+        def stop_all_pwm(self):
+            pass
+
+        def run(self, *_args, **_kwargs):
+            pass
+
+        def set_servo_pwm(self, *_args, **_kwargs):
+            pass
+
+try:
+    from Buzzer import Buzzer  # type: ignore[reportMissingImports]
+except Exception:
+    class Buzzer:  # type: ignore
+        def run(self, *_args, **_kwargs):
+            pass
+
+try:
+    from Led import Led  # type: ignore[reportMissingImports]
+except Exception:
+    class Led:  # type: ignore
+        def light(self, *_args, **_kwargs):
+            pass
+
+try:
+    from Command import COMMAND as cmd  # type: ignore[reportMissingImports]
+except Exception:
+    class _CmdFallback:
+        CMD_LED = "LED"
+    cmd = _CmdFallback()
 
 
 class ServoCalibrator:

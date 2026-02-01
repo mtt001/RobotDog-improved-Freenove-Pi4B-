@@ -1,0 +1,30 @@
+# OS metadata
+.DS_Store
+
+# Python caches
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+
+# Logs and temp files
+*.log
+*.tmp
+*.swp
+*.swo
+*~
+
+# Project temp/output folders
+Temp/
+runs/
+AI_datasets/
+
+# Jupyter
+.ipynb_checkpoints/

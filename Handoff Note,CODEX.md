@@ -1,5 +1,5 @@
 # Handoff Note — mtDogMain.py Refactor Status (2026-01-31)
-Last updated: 2026-01-31 21:45:00 CST
+Last updated: 2026-01-31 23:50:00 CST
 
 ## Goal
 Reduce `mtDogMain.py` to under 2000 lines via extraction-only refactors while preserving behavior and visuals.
@@ -74,9 +74,66 @@ Reduce `mtDogMain.py` to under 2000 lines via extraction-only refactors while pr
   - AI state initialization via controller
   - AI helper methods used by frame update pipeline
 
+### 11) Client camera helpers → `client_camera_controller.py` (2026-01-31 22:05:00 CST)
+- `ClientCameraController` owns Mac camera selection, retry logic, and combo refresh.
+- CameraWindow delegates:
+  - `_log_client_cam`, `_retry_client_camera_if_needed`, `_refresh_client_camera_list`, `_on_mac_camera_changed`
+  - Mac camera initial open during startup
+
+### 12) Telemetry loop/state → `telemetry_controller.py` (2026-01-31 22:25:00 CST)
+- `TelemetryController` owns telemetry fields and the 1 Hz polling timer.
+- CameraWindow delegates:
+  - Telemetry state initialization + timer setup
+
+### 13) Dog command helpers → `dog_command_controller.py` (2026-01-31 22:25:00 CST)
+- `DogCommandController` owns command logging, human-readable labels, and relax/stop/head helpers.
+- CameraWindow delegates:
+  - `_cmd_key_to_human`, `_log_cmd`, `_send_relax_only`, `_send_stop_pwm_only`, `send_head_angle`
+
+### 14) Ball tracking helpers → `ball_tracking_controller.py` (2026-01-31 22:25:00 CST)
+- `BallTrackingController` owns tracking transitions, full/body tracking, lost-ball search, and close-enough/bark logic.
+- CameraWindow delegates:
+  - `_handle_tracking_mode_transition`, `_update_full_body_tracking`, `_update_lost_ball_search`
+  - `_trigger_close_enough_sequence`, `_start_barking`, `_stop_barking`, `_bark_should_run`
+
+### 15) Status UI → `status_ui_controller.py` (2026-01-31 22:55:00 CST)
+- `StatusUIController` owns bottom bar HTML string and Dog Video button label/color.
+- UIEventHandlers delegates:
+  - `update_status_ui`
+
+### 16) Server check + reconnect → `server_reconnect_controller.py` (2026-01-31 23:15:00 CST)
+- `ServerReconnectController` owns background server check thread and reconnect flow.
+- UIEventHandlers delegates:
+  - `try_reconnect`
+  - server check thread stop on close
+- CameraWindow delegates:
+  - server check thread start on init
+
+### 17) Motion grid UI → `motion_grid_builder.py` (2026-01-31 23:15:00 CST)
+- `MotionGridBuilder` builds movement label + round button grid.
+- CameraWindow delegates:
+  - movement grid layout in `build_ui`
+
+### 18) Status overlay/HUD → `status_overlay_controller.py` (2026-01-31 23:20:00 CST)
+- `StatusOverlayController` owns FPS/telemetry + AI/CV/YOLO hint overlay assembly.
+- FrameUpdateController delegates:
+  - overlay draw for status/HUD text
+### 19) Control panel sections → `ui/control_panel_sections.py` (2026-01-31 23:45:00 CST)
+- `ControlPanelSectionsBuilder` builds Actions/Test/System control groups.
+- CameraWindow delegates:
+  - actions/test/system UI section creation in `build_ui`
+### 20) Frame update grouping → `frame_update_controller.py` (2026-01-31 23:45:00 CST)
+- `FrameUpdateController` groups update steps into capture/detection/overlays helpers.
+
 ## Current wiring in CameraWindow.__init__
 - `self.yolo_labeling = YoloLabelingController(self, label_window_factory=YoloLabelWindow)`
 - `self.ai_vision = AIVisionController(self, hist_window_factory=AIVisionHistogramWindow)`
+- `self.client_camera = ClientCameraController(self)`
+- `self.telemetry = TelemetryController(self, low_voltage_threshold=LOW_VOLTAGE_THRESHOLD)`
+- `self.dog_commands = DogCommandController(self, write_log_func=_write_log)`
+- `self.ball_tracking = BallTrackingController(self)`
+- `self.status_ui = StatusUIController(self)`
+- `self.server_reconnect = ServerReconnectController(self)`
 - `self.cv_ball = CVBallDetectionController(self)`
 - `self.cv_hist_debug = CVHistDebugController(self)`
 - `self.overlay = OverlayRenderer()`
@@ -93,15 +150,13 @@ Reduce `mtDogMain.py` to under 2000 lines via extraction-only refactors while pr
 - v3.20: Frame update controller extraction
 
 ## Current file size
-- `mtDogMain.py`: ~2600 lines
+- `mtDogMain.py`: ~1492 lines
 - `yolo_runtime.py`: ~1225 lines
 - `ui_event_handlers.py`: ~856 lines
 - `frame_update_controller.py`: ~1098 lines
 
 ## Next suggested extractions
-- Client camera helpers (open/scan/retry, combo refresh)
-- Telemetry/update loops (telemetry poll + HUD formatting)
-- Dog command helpers (cmd send/log helpers, close-enough sequence)
+- (none; actions/test/system + frame update grouping completed on 2026-01-31)
 
 ## Notes
 - No tests run.
