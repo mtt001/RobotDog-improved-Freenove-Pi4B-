@@ -21,6 +21,12 @@ ENV/
 *.swo
 *~
 
+# Images
+*.jpg
+*.jpeg
+*.JPG
+*.JPEG
+
 # Project temp/output folders
 Temp/
 runs/
