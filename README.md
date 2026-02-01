@@ -2888,6 +2888,13 @@ Battery drains quickly
 
 ---
 
+## Execution Modes
+- **Development Mode (MacBook Pro: YOLO + UI)**: Run the full UI and local inference on macOS; requires PyQt + OpenCV for vision/debug windows.
+- **Runtime Mode (Raspberry Pi: control + streaming)**: Run control/telemetry + camera streaming on Pi; Mac acts as client UI only.
+- **Hybrid Mode (Mac inference, Pi control)**: Run inference on Mac while Pi handles motor control and camera streaming; uses network telemetry/command channel.
+
+---
+
 ## 📚 Related Files
 - Server code (Pi): ./Server/
 - Hardware drivers: Servo, IMU, ultrasonic, camera modules
