@@ -23,7 +23,7 @@ import time
 import cv2
 import numpy as np
 
-from mtBallDetectAI import AIVisionBallDetector
+from vision.legacy.mtBallDetectAI import AIVisionBallDetector
 
 
 class AIVisionController:

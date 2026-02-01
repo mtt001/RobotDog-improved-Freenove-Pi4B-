@@ -260,12 +260,12 @@ from mtDogBallTrack import (
     TRACKING_MODE_HEAD,
     TRACKING_MODE_BODY,
 )  # <--- CHANGED: Import from merged file
-from mtBallDetectAI import AIVisionBallDetector
+from vision.legacy.mtBallDetectAI import AIVisionBallDetector
 try:
-    from mtBallDetectYOLO import YOLOBallDetector
+    from vision.legacy.mtBallDetectYOLO import YOLOBallDetector
 except Exception:
     YOLOBallDetector = None  # type: ignore
-from Command import COMMAND
+from controllers.dog_command_controller import COMMAND
 import threading
 import time
 
@@ -289,7 +289,7 @@ except Exception:
     AVCaptureDevice = None  # type: ignore
     AVMediaTypeVideo = None  # type: ignore
 
-from mtDogConfig import (
+from config.mtDogConfig import (
     DOG_DEFAULT_IP,
     DOG_VIDEO_PORT,
     DOG_CONTROL_PORT,

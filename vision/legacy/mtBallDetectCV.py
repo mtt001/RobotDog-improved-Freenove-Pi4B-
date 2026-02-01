@@ -133,7 +133,8 @@ class CVBallDetector:
         self._refine_debug: dict = {}
         self.debug_top_n_rejects = 6
         self.log_enabled = True
-        self.log_path = os.path.join(os.path.dirname(__file__), "mtBallDetectCV.log")
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
+        self.log_path = os.path.join(project_root, "mtBallDetectCV.log")
         self._run_id = 0
         self._reset_log()
 

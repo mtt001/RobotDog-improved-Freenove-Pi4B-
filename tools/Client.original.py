@@ -4,12 +4,12 @@ import copy
 import socket
 import struct
 import threading
-from PID import *
+from controllers.pid_controller import *
 from Face import *
 import numpy as np
 from Thread import *
 from PIL import Image
-from Command import COMMAND as cmd
+from controllers.dog_command_controller import COMMAND as cmd
 
 class Client:
     def __init__(self):

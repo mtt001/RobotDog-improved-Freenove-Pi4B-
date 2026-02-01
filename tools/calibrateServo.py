@@ -75,7 +75,7 @@ except Exception:
             pass
 
 try:
-    from Command import COMMAND as cmd  # type: ignore[reportMissingImports]
+    from controllers.dog_command_controller import COMMAND as cmd  # type: ignore[reportMissingImports]
 except Exception:
     class _CmdFallback:
         CMD_LED = "LED"

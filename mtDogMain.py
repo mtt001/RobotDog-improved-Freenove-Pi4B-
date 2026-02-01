@@ -321,24 +321,24 @@ from ui.common_widgets import ClickableLabel
 from ui.control_panel_sections import ControlPanelSectionsBuilder
 from ui.cv_debug_windows import CVBallDebugWindow, CVBallHistogramWindow
 from ui.yolo_debug_windows import YoloVisionDebugWindow
-from ai_vision_controller import AIVisionController
-from ball_tracking_controller import BallTrackingController
-from client_camera_controller import ClientCameraController
-from dog_command_controller import DogCommandController
-from overlay_renderer import OverlayRenderer
-from cv_hist_debug import CVHistDebugController
-from mask_picker import MaskPickerController
-from motion_grid_builder import MotionGridBuilder
-from server_reconnect_controller import ServerReconnectController
-from status_ui_controller import StatusUIController
-from telemetry_controller import TelemetryController
-from cv_ball_detection import CVBallDetectionController
-from yolo_labeling import YoloLabelingController
-from yolo_runtime import YoloRuntimeController
-from ui_event_handlers import UIEventHandlersController
-from frame_update_controller import FrameUpdateController
+from controllers.ball_tracking_controller import BallTrackingController
+from controllers.client_camera_controller import ClientCameraController
+from controllers.dog_command_controller import DogCommandController
+from controllers.frame_update_controller import FrameUpdateController
+from controllers.server_reconnect_controller import ServerReconnectController
+from controllers.telemetry_controller import TelemetryController
+from ui.status_ui_controller import StatusUIController
+from ui.ui_event_handlers import UIEventHandlersController
+from vision.ai_vision_controller import AIVisionController
+from vision.cv_hist_debug import CVHistDebugController
+from vision.mask_picker import MaskPickerController
+from vision.yolo_runtime import YoloRuntimeController
+from vision.legacy.cv_ball_detection import CVBallDetectionController
+from vision.utils.motion_grid_builder import MotionGridBuilder
+from vision.utils.overlay_renderer import OverlayRenderer
+from tools.yolo.yolo_labeling import YoloLabelingController
 
-from mtDogConfig import (
+from config.mtDogConfig import (
     DOG_DEFAULT_IP,
     DOG_VIDEO_PORT,
     DOG_CONTROL_PORT,

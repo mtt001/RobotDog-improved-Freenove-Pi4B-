@@ -13,7 +13,7 @@ import threading
 from pathlib import Path
 
 from Client import Client
-from Command import COMMAND as cmd
+from controllers.dog_command_controller import COMMAND as cmd
 
 CMD_PORT = 5001
 IP_FILE = Path(__file__).with_name("IP.txt")

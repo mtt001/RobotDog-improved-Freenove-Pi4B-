@@ -30,7 +30,7 @@ import threading
 import time
 import re
 
-from Command import COMMAND as CMD
+from controllers.dog_command_controller import COMMAND as CMD
 from Client import Client
 
 

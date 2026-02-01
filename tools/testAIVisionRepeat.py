@@ -20,7 +20,7 @@ from typing import List
 
 import cv2
 
-from mtBallDetectAI import AIVisionBallDetector, AICircle
+from vision.legacy.mtBallDetectAI import AIVisionBallDetector, AICircle
 
 
 def _format_circles(circles: List[AICircle]) -> str:

@@ -89,7 +89,7 @@ import socket, re
 import testVideoStream as tv
 from testVideoStream import DebugStreamWindow
 from Thread import stop_thread                 # for graceful cleanup (still unsafe, but resolves NameError)
-from Command import COMMAND as cmd             # make 'cmd' explicit (avoid Pylance unresolved reference)
+from controllers.dog_command_controller import COMMAND as cmd  # make 'cmd' explicit (avoid Pylance unresolved reference)
 
 import Client as ClientModule                  # module
 from Client import Client as ClientClass       # class

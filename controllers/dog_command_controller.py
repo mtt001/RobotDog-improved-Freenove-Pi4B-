@@ -19,7 +19,40 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from Command import COMMAND
+
+class COMMAND:
+    """
+    Command Constants Module
+
+    Version: 1.1.1
+    Date: 2026-01-10
+    Author: Freenove
+    """
+
+    CMD_MOVE_STOP = "CMD_MOVE_STOP"            # Space
+    CMD_MOVE_FORWARD = "CMD_MOVE_FORWARD"      # E
+    CMD_MOVE_BACKWARD = "CMD_MOVE_BACKWARD"    # C
+    CMD_MOVE_LEFT = "CMD_MOVE_LEFT"            # S
+    CMD_MOVE_RIGHT = "CMD_MOVE_RIGHT"          # F
+    CMD_TURN_LEFT = "CMD_TURN_LEFT"            # W
+    CMD_TURN_RIGHT = "CMD_TURN_RIGHT"          # R
+    CMD_BUZZER = "CMD_BUZZER"
+    CMD_LED_MOD = "CMD_LED_MOD"
+    CMD_LED = "CMD_LED"
+    CMD_BALANCE = "CMD_BALANCE"
+    CMD_SONIC = "CMD_SONIC"
+    CMD_HEIGHT = "CMD_HEIGHT"
+    CMD_HORIZON = "CMD_HORIZON"
+    CMD_HEAD = "CMD_HEAD"
+    CMD_CALIBRATION = "CMD_CALIBRATION"
+    CMD_POWER = "CMD_POWER"              # Power status# show voltage
+    CMD_ATTITUDE = "CMD_ATTITUDE"
+    CMD_RELAX = "CMD_RELAX"                    # D
+    CMD_WORKING_TIME = "CMD_WORKING_TIME"
+    CMD_STOP_PWM = "CMD_STOP_PWM"
+
+    def __init__(self):
+        pass
 
 
 class DogCommandController:

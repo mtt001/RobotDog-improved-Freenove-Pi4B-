@@ -27,7 +27,7 @@ import cv2
 import numpy as np
 
 try:
-    from mtBallDetectYOLO import YOLOBallDetector
+    from vision.legacy.mtBallDetectYOLO import YOLOBallDetector
 except Exception:
     YOLOBallDetector = None  # type: ignore
 
@@ -39,9 +39,9 @@ class YoloRuntimeController:
         self._train_hist_window_factory = train_hist_window_factory
 
         # YOLO detector (local inference) used by "Yolo Vision" mode.
-        base_dir = os.path.dirname(os.path.abspath(__file__))
-        host.yolo_model_best_path = os.path.join(base_dir, "runs", "detect", "train5", "weights", "best.pt")
-        host.yolo_model_orig_path = os.path.join(base_dir, "yolov8n.pt")
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir))
+        host.yolo_model_best_path = os.path.join(project_root, "runs", "detect", "train5", "weights", "best.pt")
+        host.yolo_model_orig_path = os.path.join(project_root, "yolov8n.pt")
         host.yolo_model_choice = "best" if os.path.isfile(host.yolo_model_best_path) else "orig"
         host.yolo_detector_best = (
             YOLOBallDetector(model_path=host.yolo_model_best_path, ball_class_id=0) if YOLOBallDetector is not None else None

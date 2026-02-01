@@ -28,7 +28,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QImage, QPixmap
 
 from mtDogBallTrack import TRACKING_MODE_FULL, TRACKING_MODE_HEAD, TRACKING_MODE_BODY
-from status_overlay_controller import StatusOverlayController
+from ui.status_overlay_controller import StatusOverlayController
 
 
 class FrameUpdateController:

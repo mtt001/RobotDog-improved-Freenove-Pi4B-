@@ -66,7 +66,7 @@ from pathlib import Path
 from typing import Optional
 
 from Client import Client
-from Command import COMMAND as cmd
+from controllers.dog_command_controller import COMMAND as cmd
 
 # ============================================================================
 # Configuration Constants

@@ -81,7 +81,7 @@ from PyQt5.QtGui import QImage, QPixmap
 from PyQt5.QtCore import Qt
 
 try:
-    from mtBallDetectCV import CVBallDetector
+    from vision.legacy.mtBallDetectCV import CVBallDetector
 except Exception:
     CVBallDetector = None  # type: ignore
 
@@ -320,7 +320,7 @@ class BallTracker:
 
         # Config path
         self.config_path = os.path.join(
-            os.path.dirname(__file__), "mtBall_Calib.json"
+            os.path.dirname(__file__), "config", "mtBall_Calib.json"
         )
 
         # Optional CV detector (basic, non-ML)

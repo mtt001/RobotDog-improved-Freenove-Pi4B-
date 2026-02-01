@@ -13,8 +13,8 @@ if ROOT not in sys.path:
 import cv2
 import numpy as np
 
-from mtBallDetectAI import AIVisionBallDetector
-from mtBallDetectYOLO import YOLOBallDetector
+from vision.legacy.mtBallDetectAI import AIVisionBallDetector
+from vision.legacy.mtBallDetectYOLO import YOLOBallDetector
 
 
 def _denorm_circle_to_px(circle, w, h):

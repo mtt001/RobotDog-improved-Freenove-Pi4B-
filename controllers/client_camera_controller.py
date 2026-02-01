@@ -31,7 +31,7 @@ except Exception:
     AVCaptureDevice = None  # type: ignore
     AVMediaTypeVideo = None  # type: ignore
 
-from mtDogConfig import CLIENT_CAMERA_INDEX_ORDER, CLIENT_CAMERA_RETRY_SEC
+from config.mtDogConfig import CLIENT_CAMERA_INDEX_ORDER, CLIENT_CAMERA_RETRY_SEC
 
 
 class ClientCameraController:

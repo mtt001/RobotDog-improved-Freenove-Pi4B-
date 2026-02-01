@@ -31,13 +31,13 @@ import socket
 import struct
 import threading
 import time
-from PID import *
+from controllers.pid_controller import *
 from Face import *
 import numpy as np
 from Thread import *
 from PIL import Image
 import cv2  # REQUIRED for imdecode in receiving_video
-from Command import COMMAND as cmd
+from controllers.dog_command_controller import COMMAND as cmd
 # External ball tracking override (disabled until BallTracking.py matured)
 # from BallTracking import Looking_for_the_ball  # Uncomment when ready to override method
 

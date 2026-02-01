@@ -45,7 +45,8 @@ class YoloLabelingController:
         self._host._yolo_labeling_save_msg_ts = 0.0
 
     def yolo_train_next_version_dir(self) -> tuple[str, str]:
-        root = os.path.join(os.path.dirname(__file__), "AI_datasets")
+        project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), os.pardir, os.pardir))
+        root = os.path.join(project_root, "AI_datasets")
         os.makedirs(root, exist_ok=True)
         # Always create a new version folder to preserve existing datasets.
         for v in range(1, 100):
