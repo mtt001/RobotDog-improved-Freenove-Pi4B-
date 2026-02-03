@@ -13,6 +13,9 @@ __pycache__/
 .venv/
 venv/
 ENV/
+**/.venv/
+**/venv/
+**/ENV/
 
 # Logs and temp files
 *.log
@@ -31,6 +34,15 @@ ENV/
 Temp/
 runs/
 AI_datasets/
+**/Temp/
+**/runs/
+**/AI_datasets/
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Local archives / originals (keep out of repo)
+Backup/
+Backup.textClipping
+Client(Original)/
+Server(Original)/

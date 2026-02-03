@@ -1,11 +1,6 @@
 {
-    "python-envs.defaultEnvManager": "ms-python.python:system",
-    "python-envs.pythonProjects": [],
-    "python.defaultInterpreterPath": "/opt/homebrew/bin/python3.12",
-    "python.analysis.logLevel": "Trace",
-    "python.showInterpreterStatusInStatusBar": true,
-    "inlineChat.notebookAgent": true,
-    "inlineChat.enableV2": true,
-    "chat.useAgentSkills": true,
-    "chat.useNestedAgentsMdFiles": true
+    "editor.quickSuggestions": {
+        "comments": "inline",
+        "strings": "on"
+    }
 }

@@ -1,0 +1,2 @@
+updated 10/29,2025  13:21
+this is a test for syncPi.sh
