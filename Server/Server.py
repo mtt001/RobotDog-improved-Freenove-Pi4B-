@@ -130,6 +130,7 @@ SEQUENCE_INCLUDE_SUPPRESSED = False
 
 # Health monitoring / recovery (log-only + socket re-open)
 HEALTH_MONITOR_ENABLED = True
+HEALTH_LOG_ENABLED = False
 HEALTH_LOG_INTERVAL_SEC = 15.0
 HEALTH_REOPEN_BACKOFF_SEC = 2.0
 
@@ -267,17 +268,18 @@ class Server:
                 )
                 if need_reopen and (now - self._last_reopen_attempt_ts) >= HEALTH_REOPEN_BACKOFF_SEC:
                     self._last_reopen_attempt_ts = now
-                    print(
-                        "[HEALTH] Detected missing LISTEN socket(s). "
-                        "Auto-reopening ports 8001/5001 now..."
-                    )
-                    print(
-                        "[HEALTH] If this repeats, check: camera busy, low voltage shutdown, "
-                        "or restart via 'Code/Server/smartdog.sh restart'."
-                    )
+                    if HEALTH_LOG_ENABLED:
+                        print(
+                            "[HEALTH] Detected missing LISTEN socket(s). "
+                            "Auto-reopening ports 8001/5001 now..."
+                        )
+                        print(
+                            "[HEALTH] If this repeats, check: camera busy, low voltage shutdown, "
+                            "or restart via 'Code/Server/smartdog.sh restart'."
+                        )
                     self._open_listeners(notify_user=False)
 
-                if (now - self._last_health_log_ts) >= HEALTH_LOG_INTERVAL_SEC:
+                if HEALTH_LOG_ENABLED and (now - self._last_health_log_ts) >= HEALTH_LOG_INTERVAL_SEC:
                     self._last_health_log_ts = now
                     v_listen = self._is_socket_open(getattr(self, 'server_socket', None))
                     c_listen = self._is_socket_open(getattr(self, 'server_socket1', None))
@@ -298,10 +300,11 @@ class Server:
                     )
             except Exception as e:
                 # Never let the health thread die.
-                try:
-                    print(f"[HEALTH] monitor error: {e}")
-                except Exception:
-                    pass
+                if HEALTH_LOG_ENABLED:
+                    try:
+                        print(f"[HEALTH] monitor error: {e}")
+                    except Exception:
+                        pass
             time.sleep(1.0)
 
     def _ensure_health_thread(self):

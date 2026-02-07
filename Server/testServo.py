@@ -21,7 +21,7 @@ Usage:
         testServo.py OFF          - Disable all servo PWM outputs (servos go limp)
         testServo.py calib        - Set servos to default calibration position
         testServo.py relax        - Move to RELAX position via Control (resting pose)
-        testServo.py MOVE         - Interactive drive mode (w/s/a/d/tl/tr/x/relax/off, Esc quits)
+        testServo.py MOVE         - Interactive drive mode (w/s/a/d/tl/tr/x/relax/off, q/Esc = RELAX+OFF+quit)
         testServo.py <0-180>      - Set all 16 servos to specified angle (0-180°)
         testServo.py TEST [delay] - Run class-based servo exercise (default delay 0.02s)
         testServo.py test [delay] - Run legacy test_Servo() pattern (default delay 0.01s)
@@ -71,6 +71,9 @@ import sys
 import time
 import signal
 import select
+import atexit
+import termios 
+import tty
 from Servo import Servo
 from Buzzer import Buzzer
 from Led import Led
@@ -120,15 +123,47 @@ def flash_led_device(led, count=1, on_time=0.2, off_time=0.2):
         pass
 
 
+_tty_cbreak_enabled = False
+_tty_old_settings = None
+
+
+def _ensure_tty_cbreak() -> None:
+    """Put stdin into cbreak mode so single-key reads work immediately."""
+    global _tty_cbreak_enabled, _tty_old_settings
+    if _tty_cbreak_enabled:
+        return
+    if not sys.stdin.isatty():
+        return
+    try:
+        _tty_old_settings = termios.tcgetattr(sys.stdin.fileno())
+        tty.setcbreak(sys.stdin.fileno())
+        _tty_cbreak_enabled = True
+        atexit.register(_restore_tty)
+    except Exception:
+        _tty_cbreak_enabled = False
+
+
+def _restore_tty() -> None:
+    global _tty_cbreak_enabled, _tty_old_settings
+    if not _tty_cbreak_enabled or _tty_old_settings is None:
+        return
+    try:
+        termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, _tty_old_settings)
+    except Exception:
+        pass
+    _tty_cbreak_enabled = False
+
+
 def user_requested_quit() -> bool:
-    """Return True if the user pressed ESC (non-blocking)."""
+    """Return True if the user pressed ESC or 'q' (non-blocking)."""
     try:
         if not sys.stdin.isatty():
             return False
+        _ensure_tty_cbreak()
         rlist, _, _ = select.select([sys.stdin], [], [], 0)
         if rlist:
             ch = sys.stdin.read(1)
-            return ch == '\x1b'
+            return ch in ('\x1b', 'q', 'Q')
         return False
     except Exception:
         return False
@@ -142,7 +177,7 @@ def test_Servo(delay: float = 0.01, repeat: bool = False) -> bool:
         - Forward sweeps (3 passes) with head motion limited to 45°–135°.
         - Double beep + double LED flash, wait 2s.
         - Reverse sweeps back to 90° at the same speed.
-        - If repeat=True, loop continuously until Ctrl+C or ESC entered.
+        - If repeat=True, loop continuously until Ctrl+C or q/ESC entered.
 
     Args:
         delay: Sleep time between steps (seconds). Default 0.01.
@@ -168,6 +203,23 @@ def test_Servo(delay: float = 0.01, repeat: bool = False) -> bool:
     def flash_led(count: int = 2) -> None:
         flash_led_device(led, count=count, on_time=0.2, off_time=0.2)
 
+    quit_done = False
+
+    def graceful_quit() -> None:
+        """Move to RELAX posture and stop PWM outputs (best-effort)."""
+        nonlocal quit_done
+        if quit_done:
+            return
+        quit_done = True
+        try:
+            Control().relax(True)
+        except Exception:
+            pass
+        try:
+            s.stop_all_pwm()
+        except Exception:
+            pass
+
     def run_cycle() -> bool:
         """Run a single test cycle. Returns False if interrupted."""
         try:
@@ -185,6 +237,7 @@ def test_Servo(delay: float = 0.01, repeat: bool = False) -> bool:
                 s.setServoAngle(11, 90 + i)
                 set_head(i / 2)  # Head: 90→135
                 if user_requested_quit():
+                    graceful_quit()
                     raise KeyboardInterrupt()
                 time.sleep(delay)
 
@@ -195,6 +248,7 @@ def test_Servo(delay: float = 0.01, repeat: bool = False) -> bool:
                 s.setServoAngle(13, 90 + i)
                 set_head(-i / 2)  # Head: 135→45
                 if user_requested_quit():
+                    graceful_quit()
                     raise KeyboardInterrupt()
                 time.sleep(delay)
 
@@ -205,6 +259,7 @@ def test_Servo(delay: float = 0.01, repeat: bool = False) -> bool:
                 s.setServoAngle(12, 90 + i)
                 set_head(i / 2)  # Head: 45→75
                 if user_requested_quit():
+                    graceful_quit()
                     raise KeyboardInterrupt()
                 time.sleep(delay)
 
@@ -221,6 +276,7 @@ def test_Servo(delay: float = 0.01, repeat: bool = False) -> bool:
                 s.setServoAngle(12, 90 + i)
                 set_head(i / 2)  # Head: ~75→90
                 if user_requested_quit():
+                    graceful_quit()
                     raise KeyboardInterrupt()
                 time.sleep(delay)
 
@@ -231,6 +287,7 @@ def test_Servo(delay: float = 0.01, repeat: bool = False) -> bool:
                 s.setServoAngle(13, 90 + i)
                 set_head(-i / 2)  # Head: 45→90
                 if user_requested_quit():
+                    graceful_quit()
                     raise KeyboardInterrupt()
                 time.sleep(delay)
 
@@ -241,6 +298,7 @@ def test_Servo(delay: float = 0.01, repeat: bool = False) -> bool:
                 s.setServoAngle(11, 90 + i)
                 set_head(i / 2)  # Head: 135→90
                 if user_requested_quit():
+                    graceful_quit()
                     raise KeyboardInterrupt()
                 time.sleep(delay)
 
@@ -272,8 +330,8 @@ def test_Servo(delay: float = 0.01, repeat: bool = False) -> bool:
                 print("End of program")
                 return False
         else:
-            # Repeat mode - loop until Ctrl+C or ESC entered
-            print("\n🔄 Running in repeat mode. Press Ctrl+C or ESC to stop.\n")
+            # Repeat mode - loop until Ctrl+C or q/ESC entered
+            print("\n🔄 Running in repeat mode. Press Ctrl+C or q/ESC to stop.\n")
             while True:
                 cycle_count += 1
                 print(f"\n{'='*60}")
@@ -281,6 +339,7 @@ def test_Servo(delay: float = 0.01, repeat: bool = False) -> bool:
                 print(f"{'='*60}")
                 
                 if user_requested_quit():
+                    graceful_quit()
                     raise KeyboardInterrupt()
                 
                 if not run_cycle():
@@ -323,15 +382,10 @@ def test_Servo(delay: float = 0.01, repeat: bool = False) -> bool:
 class ServoTester:
     def __init__(self):
         self.stop_requested = False  # Set when Ctrl+C arrives
+        self._graceful_done = False
         signal.signal(signal.SIGINT, self._handle_sigint)
         self.servo = Servo()
         self.control = Control()
-        # Ensure the control condition thread is running so commands are processed
-        if not self.control.Thread_conditiona.is_alive():
-            try:
-                self.control.Thread_conditiona.start()
-            except RuntimeError:
-                pass
         self.buzzer = init_buzzer()
         self.led = init_led()
         
@@ -341,10 +395,30 @@ class ServoTester:
             print(f"⚠️  Note: LED feedback requires sudo. Continuing without LED.\n")
 
     def _handle_sigint(self, signum, frame):
-        """Handle Ctrl+C promptly by setting a stop flag and raising KeyboardInterrupt."""
+        """Handle Ctrl+C promptly by setting a stop flag."""
+        if self.stop_requested:
+            # Second Ctrl+C: allow immediate exit
+            signal.signal(signal.SIGINT, signal.SIG_DFL)
+            return
         self.stop_requested = True
         print("\n\n⚠️  Ctrl+C received, stopping...", flush=True)
-        raise KeyboardInterrupt()
+
+    def _graceful_stop(self, reason: str = ""):
+        """Move to RELAX posture, stop PWM, and mark stop requested."""
+        if self._graceful_done:
+            return
+        self._graceful_done = True
+        self.stop_requested = True
+        if reason:
+            print(f"\n🛑 {reason}: relaxing and stopping servos...")
+        try:
+            self.control.relax(True)
+        except Exception as e:
+            print(f"   └─ RELAX warning: {e}")
+        try:
+            self.servo.stop_all_pwm()
+        except Exception as e:
+            print(f"   └─ STOP_PWM warning: {e}")
     
     def beep(self, count=1, duration=0.1, pause=0.1):
         """Emit beeps as feedback using proven on/off pulse method."""
@@ -617,7 +691,7 @@ class ServoTester:
                 self.servo.setServoAngle(8, 90 + i)
                 self.servo.setServoAngle(11, 90 + i)
                 if user_requested_quit():
-                    self.stop_requested = True
+                    self._graceful_stop("Quit requested")
                     raise KeyboardInterrupt()
                 time.sleep(delay)
 
@@ -627,7 +701,7 @@ class ServoTester:
                 self.servo.setServoAngle(10, 90 + i)
                 self.servo.setServoAngle(13, 90 + i)
                 if user_requested_quit():
-                    self.stop_requested = True
+                    self._graceful_stop("Quit requested")
                     raise KeyboardInterrupt()
                 time.sleep(delay)
 
@@ -637,7 +711,7 @@ class ServoTester:
                 self.servo.setServoAngle(9, 90 + i)
                 self.servo.setServoAngle(12, 90 + i)
                 if user_requested_quit():
-                    self.stop_requested = True
+                    self._graceful_stop("Quit requested")
                     raise KeyboardInterrupt()
                 time.sleep(delay)
 
@@ -667,6 +741,13 @@ class ServoTester:
 
         Optional speed (int) can follow movement commands, defaulting to current speed.
         """
+        # Ensure the control condition thread is running so commands are processed
+        if not self.control.Thread_conditiona.is_alive():
+            try:
+                self.control.Thread_conditiona.daemon = True
+                self.control.Thread_conditiona.start()
+            except RuntimeError:
+                pass
         default_speed = self.control.speed if hasattr(self.control, "speed") else 8
 
         def dispatch(command_name, speed=None):
@@ -682,13 +763,16 @@ class ServoTester:
         def quit_and_release():
             """Stop motion, move to RELAX, then release PWM outputs (servos limp)."""
             dispatch(cmd.CMD_MOVE_STOP)
-            dispatch(cmd.CMD_RELAX)
-            dispatch(cmd.CMD_STOP_PWM)
+            self._graceful_stop("Quit requested")
 
         try:
             while True:
                 # Non-blocking quit check
                 if user_requested_quit():
+                    quit_and_release()
+                    return True
+
+                if self.stop_requested:
                     quit_and_release()
                     return True
 
@@ -786,9 +870,10 @@ class ServoTester:
                 cycle_count += 1
                 for angle in angles:
                     if self.stop_requested:
+                        self._graceful_stop("Stop requested")
                         raise KeyboardInterrupt()
                     if user_requested_quit():
-                        self.stop_requested = True
+                        self._graceful_stop("Quit requested")
                         raise KeyboardInterrupt()
                     # Move servo to target angle
                     self.servo.setServoAngle(channel, angle)    # Move channel servo to angle
@@ -796,6 +881,7 @@ class ServoTester:
                     # Wait before feedback (delay is the main wait time)
                     time.sleep(delay)
                     if self.stop_requested:
+                        self._graceful_stop("Stop requested")
                         raise KeyboardInterrupt()
                     
                     print(f"   Cycle {cycle_count}: Channel {channel} → {angle}° ", end="")
@@ -855,9 +941,10 @@ class ServoTester:
                 cycle_count += 1
                 for angle in angles:
                     if self.stop_requested:
+                        self._graceful_stop("Stop requested")
                         raise KeyboardInterrupt()
                     if user_requested_quit():
-                        self.stop_requested = True
+                        self._graceful_stop("Quit requested")
                         raise KeyboardInterrupt()
                     # Move all servos to target angle
                     for ch in range(16):
@@ -866,6 +953,7 @@ class ServoTester:
                     # Wait before feedback (delay is the main wait time)
                     time.sleep(delay)
                     if self.stop_requested:
+                        self._graceful_stop("Stop requested")
                         raise KeyboardInterrupt()
                     
                     print(f"   Cycle {cycle_count}: All channels → {angle}° ", end="")
@@ -1109,7 +1197,7 @@ class ServoTester:
      OFF                                Disable all servo PWM outputs (servos go limp)
      calib                              Set servos to default calibration position
      relax                              Move to RELAX position (resting pose, PWM disabled)
-     MOVE                               Interactive drive mode (w/s/a/d/tl/tr/x/relax/off, q or Esc to quit)
+    MOVE                               Interactive drive mode (w/s/a/d/tl/tr/x/relax/off, q/Esc = RELAX+OFF+quit)
      TEST [delay]                       Run class-based servo exercise (default delay 0.02s)
      test [delay] [--once]              Run legacy test_Servo() sweep in repeat mode (default delay 0.01s)
                                         Use --once to run a single cycle only
@@ -1132,7 +1220,7 @@ class ServoTester:
       Move to RELAX position (legs tucked, power-saving mode)
    
     python3 testServo.py MOVE
-       Enter interactive MOVE mode (w/s/a/d/tl/tr/x/relax/off, q or Esc to quit)
+    Enter interactive MOVE mode (w/s/a/d/tl/tr/x/relax/off, q/Esc = RELAX+OFF+quit)
    
    python3 testServo.py TEST 0.05
       Run servo exercise with 0.05s delay between steps
