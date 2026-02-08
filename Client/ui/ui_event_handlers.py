@@ -10,6 +10,8 @@
      UI event handler controller extracted from mtDogMain.py (CameraWindow).
      Handles UI button events, status updates, and cleanup/quit logic.
 
+ v1.02  (2026-02-07 20:42)    : Close pluggable Dog video source on app exit
+     • Ensure external video backend resources are released in close flow.
  v1.00  (2026-01-31 20:50)    : Initial UI event handler controller extraction
      • Extract UI handlers + status updates from CameraWindow.
  v1.01  (2026-02-01)          : Remove CV/GPT Vision handlers
@@ -406,6 +408,10 @@ class UIEventHandlersController:
                     host.dog_client.turn_off_client()
             except Exception as e:
                 print(f"[CLOSE] Error closing dog client: {e}")
+        try:
+            host._close_dog_video_source()
+        except Exception:
+            pass
 
         if host.cap is not None:
             try:

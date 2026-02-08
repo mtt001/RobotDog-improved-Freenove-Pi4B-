@@ -1,0 +1,23 @@
+# Version: 2026.02.07-1
+[Unit]
+Description=RobotDog WebRTC Publisher
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Client/tools/realtime_webrtc/robot
+Environment=SFU_HOST=192.168.0.198
+Environment=STREAM_PATH=robotdog
+Environment=WIDTH=960
+Environment=HEIGHT=540
+Environment=FPS=30
+Environment=BITRATE=2000000
+Environment=PUBLISH_MODE=whip
+ExecStart=/bin/bash /home/pi/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Client/tools/realtime_webrtc/robot/pi_publish_webrtc.sh
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

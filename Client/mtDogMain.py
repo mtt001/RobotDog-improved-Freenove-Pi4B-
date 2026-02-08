@@ -9,7 +9,19 @@ os.environ["OPENCV_VIDEOIO_DEBUG"] = "0"
  Project : Freenove Robot Dog - Enhanced Video Client (Mac)
  File   : mtDogMain.py
  Author : MT & GitHub Copilot
+ Usage  :
+     1) Configure video backend in `config/mtDogConfig.py`:
+        - `VIDEO_BACKEND = "sfu_rtsp"` (recommended low latency)
+        - `VIDEO_BACKEND = "legacy_socket"` (original Pi 8001 JPEG stream)
+     2) Run: `python3 mtDogMain.py`
 
+ v3.34  (2026-02-08 10:45)    : Restore WASD+QE motion keys
+     • Reverted experimental motion keys to standard W/S (fwd/back), A/D (turns), Q/E (strafe).
+     • Fixed command blocking when video backend is not "dog" (allow blind control).
+ v3.33  (2026-02-07 19:40)    : Add SFU low-latency video backend (RTSP pull)
+     • New selectable backend: legacy Pi socket or SFU RTSP (`config/mtDogConfig.py`).
+     • Dog mode can use command channel on 5001 with video from SFU (no direct Pi camera pull).
+     • Startup/reconnect probes selected backend and displays SFU path in status bar.
  v3.32  (2026-02-02 20:31)    : Add bottom IMU message box beside vision status pane.
  v3.31  (2026-02-02)          : Increase startup window height
      • Start with a taller window so Motion controls never overlap on launch.
@@ -218,20 +230,20 @@ os.environ["OPENCV_VIDEOIO_DEBUG"] = "0"
      • Added AI histogram window with H/S/V histograms from half-radius ROI.
      • Histogram window persists even after AI Vision is turned off.
 
+ v2.55  (2026-01-14)          : Body tracking proportional speed (Kp)
+     • Added Body-Kp proportional speed control (replaces bang-bang feel by scaling turn/forward speed).
+     • Body-Kp is optional (0.0 keeps fixed-speed behavior) and persisted to mtBall_Calib.json.
+
+ v2.54  (2026-01-14)          : Body tracking derivative damping (Kd)
+     • Added derivative damping (Body-Kd) to reduce overshoot when deadzone is narrow.
+     • Expose Body-Kd slider in Mask window and persist to mtBall_Calib.json.
+
  v2.53  (2026-01-14)          : Body tracking motion policy update
      • Body tracking now prioritizes left/right turning to X-center the ball.
      • Forward/backward motion is blocked until the ball is X-centered within tolerance.
      • Switching from Y→X correction triggers an immediate turn command (no extra wait).
      • Body tracking defaults to forward-only (no backward) to reduce surprises from jitter.
      • Expose "Allow backward" in Mask window and persist to mtBall_Calib.json.
-
- v2.54  (2026-01-14)          : Body tracking derivative damping (Kd)
-     • Added derivative damping (Body-Kd) to reduce overshoot when deadzone is narrow.
-     • Expose Body-Kd slider in Mask window and persist to mtBall_Calib.json.
-
- v2.55  (2026-01-14)          : Body tracking proportional speed (Kp)
-     • Added Body-Kp proportional speed control (replaces bang-bang feel by scaling turn/forward speed).
-     • Body-Kp is optional (0.0 keeps fixed-speed behavior) and persisted to mtBall_Calib.json.
 
  v2.50  (2025-12-05)          : Stable release
     • Fix head servo control commands,  refer Main.py for correct command format.
@@ -347,6 +359,7 @@ from controllers.dog_command_controller import DogCommandController, COMMAND as 
 from controllers.frame_update_controller import FrameUpdateController
 from controllers.server_reconnect_controller import ServerReconnectController
 from controllers.telemetry_controller import TelemetryController
+from controllers.video_source_controller import VideoSourceController
 from ui.status_ui_controller import StatusUIController
 from ui.ui_event_handlers import UIEventHandlersController
 from vision.ai_vision_controller import AIVisionController
@@ -366,6 +379,13 @@ from config.mtDogConfig import (
     YOLO_COCO_CONF_DEFAULT,
     YOLO_MT_BALL_CONF_DEFAULT,
     YOLO_DUAL_CAP_FPS_DEFAULT,
+    VIDEO_BACKEND,
+    SFU_RTSP_URL,
+    SFU_RTSP_TRANSPORT,
+    SFU_STREAM_PATH,
+    VIDEO_TARGET_WIDTH,
+    VIDEO_TARGET_HEIGHT,
+    VIDEO_TARGET_FPS,
 )
 from mtDogLogicMixin import DogLogicMixin
 
@@ -877,6 +897,15 @@ class CameraWindow(QWidget, DogLogicMixin):
         self.ip = ip
         self.video_port = video_port
         self.control_port = control_port
+        self.video_backend = str(VIDEO_BACKEND).strip().lower()
+        self.sfu_rtsp_url = str(SFU_RTSP_URL).strip()
+        self.sfu_rtsp_transport = str(SFU_RTSP_TRANSPORT).strip().lower()
+        self.sfu_stream_path = str(SFU_STREAM_PATH).strip()
+        self.video_target_width = int(VIDEO_TARGET_WIDTH)
+        self.video_target_height = int(VIDEO_TARGET_HEIGHT)
+        self.video_target_fps = int(VIDEO_TARGET_FPS)
+        # In SFU mode we only need command channel from dog_client; camera is pulled from SFU RTSP.
+        self.external_video_stream = self.video_backend == "sfu_rtsp"
 
         # Status flags for bottom bar
         self.server_ip_ok = False
@@ -898,6 +927,9 @@ class CameraWindow(QWidget, DogLogicMixin):
         self.video_thread = None
         self.cmd_thread = None
         self.stop_cmd_thread = False
+        self.video_source_controller = VideoSourceController(self)
+        self.video_source = None
+        self.video_source_last_error = ""
 
         # FPS measurement: display vs receive (Dog mode)
         self.display_fps = 0.0
@@ -1143,7 +1175,7 @@ class CameraWindow(QWidget, DogLogicMixin):
     def _startup_initial_probe(self):
         """Decide initial mode and give the window a sane startup size."""
         try:
-            self.setWindowTitle("mtDogMain v2.40 - Mac Client + Dog Pi (Dog commands only)")
+            self.setWindowTitle("mtDogMain v3.33 - Mac Client + Dog Pi + SFU low-latency video")
         except Exception:
             pass
 
@@ -1159,25 +1191,26 @@ class CameraWindow(QWidget, DogLogicMixin):
         except Exception:
             pass
 
-        # Prefer Dog mode when both control and video ports are reachable.
+        # Prefer Dog mode when control is reachable and selected video backend is ready.
         try:
-            ok = (
-                self.ping_ip(self.ip)
-                and self.test_tcp_port(self.ip, self.control_port)
-                and self.test_tcp_port(self.ip, self.video_port)
-            )
+            ip_ok = self.ping_ip(self.ip)
+            ctrl_ok = self.test_tcp_port(self.ip, self.control_port)
+            video_ok = self._probe_selected_video_path()
+            ok = ip_ok and ctrl_ok and video_ok
+            self.server_ip_ok = bool(ip_ok)
+            self.server_control_ok = bool(ctrl_ok)
+            self.server_video_ok = bool(video_ok)
         except Exception:
             ok = False
 
         if ok:
             print("[INIT] Dog Pi reachable at startup → DOG mode.")
-            self.server_ip_ok = True
-            self.server_control_ok = True
-            self.server_video_ok = True
             self.dog_connected = True
 
             try:
                 self.start_dog_client()
+                if not self._init_dog_video_source():
+                    raise RuntimeError(f"video source init failed ({self.video_backend})")
                 self.use_dog_video = True
                 self.schedule_dog_entry_beep()
             except Exception as e:
@@ -1191,6 +1224,39 @@ class CameraWindow(QWidget, DogLogicMixin):
             self.update_status_ui()
         except Exception:
             pass
+
+    def _probe_selected_video_path(self) -> bool:
+        backend = str(getattr(self, "video_backend", "legacy_socket") or "legacy_socket").strip().lower()
+        if backend == "sfu_rtsp":
+            src = self.video_source_controller.create_source()
+            return bool(src.probe(timeout_s=1.0))
+        return self.test_tcp_port(self.ip, self.video_port)
+
+    def _init_dog_video_source(self) -> bool:
+        try:
+            self._close_dog_video_source()
+        except Exception:
+            pass
+        src = self.video_source_controller.create_source()
+        self.video_source = src
+        ok = bool(src.open())
+        if not ok:
+            self.video_source_last_error = getattr(src, "last_err", "") or "video source open failed"
+            print(f"[VIDEO] Backend={self.video_backend} open failed: {self.video_source_last_error}")
+        else:
+            self.video_source_last_error = ""
+            print(f"[VIDEO] Backend={self.video_backend} ready.")
+        return ok
+
+    def _close_dog_video_source(self):
+        src = getattr(self, "video_source", None)
+        if src is None:
+            return
+        try:
+            src.close()
+        except Exception:
+            pass
+        self.video_source = None
 
     # ==================================================================
     # UI BUILDING
@@ -1718,13 +1784,13 @@ class CameraWindow(QWidget, DogLogicMixin):
     def keyPressEvent(self, event):
         """
         Keyboard:
-          W/E/R/S/D/F/C → motion
+          WASD+QE → motion std (W=fwd, S=back, A=turnL, D=turnR, Q=strafeL, E=strafeR)
           Space → stop (CMD_MOVE_STOP)
           B → beep
           L → LED
           K → calib
           P → play
-          Q → quit
+          Q → quit (if Ctrl+Q, but here Q is motion strafe! Need to resolve conflict)
           T → toggle ball tracking (same as Ball button)
         """
         # Space sometimes comes through as a keycode with blank text on some platforms,
@@ -1738,7 +1804,13 @@ class CameraWindow(QWidget, DogLogicMixin):
             return
         key = text.lower()
 
-        if key in ("w", "e", "r", "s", "d", "f", "c"):
+        # Resolve Q conflict: check modifiers or just use Q for motion?
+        # Standard Main.py used Q for strafe and did not have 'Q' for quit (it was Esc or close button).
+        # send_motion_command handles 'q'.
+        # handle_quit is mapped to Key_Q in some contexts?
+        # Let's map 'q' to motion. If user wants to quit, they can use window close or Cmd+Q.
+
+        if key in ("w", "a", "s", "d", "q", "e"):
             self.send_motion_command(key)
         elif key == "b":
             self.handle_beep_key()
@@ -1748,8 +1820,6 @@ class CameraWindow(QWidget, DogLogicMixin):
             self.handle_calib_button()
         elif key == "p":
             self.handle_play_button()
-        elif key == "q":
-            self.handle_quit()
         elif key == "t":
             self.handle_ball_button()
         else:

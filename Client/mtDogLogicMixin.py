@@ -6,6 +6,12 @@
  File   : mtDogLogicMixin.py
  Author : MT & Copilot ChatGPT
 
+ v2.16  (2026-02-08)
+     • Restore standard WASD+QE key mapping for send_motion_command.
+     • Allow motion commands based on control channel health (ignore video status).
+ v2.15  (2026-02-07)          : Support external SFU video backend in mtDogMain
+     • Skip legacy Pi video thread when external video stream mode is enabled.
+     • Server check now evaluates video health through selected backend path.
  v2.14  (2026-02-02 20:31)    : Add IMU polling + attitude parsing for client telemetry.
  v2.13  (2026-02-01)
      • Fix Client import path (use legacy/Client.py).
@@ -124,6 +130,38 @@ class DogLogicMixin:
 
         # ---------- DOG MODE ----------
         if self.use_dog_video:
+            if bool(getattr(self, "external_video_stream", False)):
+                ip_ok = self.ping_ip(self.ip)
+                self.server_ip_ok = ip_ok
+                ctrl_ok = (
+                    self.dog_client is not None
+                    and getattr(self.dog_client, "tcp_flag", False)
+                )
+                self.server_control_ok = ctrl_ok
+                now_ext = time.time()
+                last = float(getattr(self, "dog_last_frame_time", 0.0) or 0.0)
+                if last > 0.0 and (now_ext - last) <= 2.0:
+                    self.server_video_ok = True
+                    self.video_stall = False
+                else:
+                    if last <= 0.0:
+                        # Connected but no frame received yet.
+                        self.server_video_ok = False
+                        self.video_stall = False
+                    else:
+                        try:
+                            self.server_video_ok = bool(self._probe_selected_video_path())
+                        except Exception:
+                            self.server_video_ok = False
+                        self.video_stall = bool((now_ext - last) > 2.0)
+                self.dog_connected = (
+                    self.server_ip_ok
+                    and self.server_control_ok
+                    and self.server_video_ok
+                    and not self.video_stall
+                )
+                return
+
             if self.dog_has_recent_frame:
                 self.dog_connected = True
                 self.server_ip_ok = True
@@ -217,12 +255,15 @@ class DogLogicMixin:
             print(f"[DOG] Warning: turn_on_client failed: {e}")
 
         # Video thread from Freenove Client
-        self.video_thread = threading.Thread(
-            target=self.dog_client.receiving_video,
-            args=(self.ip,),
-            daemon=True,
-        )
-        self.video_thread.start()
+        if not bool(getattr(self, "external_video_stream", False)):
+            self.video_thread = threading.Thread(
+                target=self.dog_client.receiving_video,
+                args=(self.ip,),
+                daemon=True,
+            )
+            self.video_thread.start()
+        else:
+            self.video_thread = None
 
         # Command/telemetry receiver thread
         self.cmd_thread = threading.Thread(
@@ -893,7 +934,15 @@ class DogLogicMixin:
             print(f"[CMD] stop failed: {e}")
 
     def send_motion_command(self, key_char: str, speed_override: int | None = None):
-        """Map W/E/R/S/D/F/C to CMD_* and send in Dog mode.
+        """Map WASD+QE to CMD_* and send in Dog mode.
+        
+        W: Forward
+        S: Backward
+        A: Turn Left
+        D: Turn Right
+        Q: Step Left (Strafe)
+        E: Step Right (Strafe)
+        Space: Stop (handled via send_stop_motion)
 
         speed_override: Optional int speed (2..10) to use for this one command.
         """
@@ -901,24 +950,21 @@ class DogLogicMixin:
         cmd_str = None
 
         if key == "w":
-            cmd_str = CMD.CMD_TURN_LEFT
-        elif key == "e":
             cmd_str = CMD.CMD_MOVE_FORWARD
-        elif key == "r":
-            cmd_str = CMD.CMD_TURN_RIGHT
         elif key == "s":
-            cmd_str = CMD.CMD_MOVE_LEFT
-        elif key == "d":
-            cmd_str = CMD.CMD_RELAX
-        elif key == "f":
-            cmd_str = CMD.CMD_MOVE_RIGHT
-        elif key == "c":
             cmd_str = CMD.CMD_MOVE_BACKWARD
+        elif key == "a":
+            cmd_str = CMD.CMD_TURN_LEFT
+        elif key == "d":
+            cmd_str = CMD.CMD_TURN_RIGHT
+        elif key == "q":
+            cmd_str = CMD.CMD_MOVE_LEFT
+        elif key == "e":
+            cmd_str = CMD.CMD_MOVE_RIGHT
 
         if cmd_str is None:
             return
 
-        # Protocol note (matches Freenove server):
         # Movement/turn/stop commands expect a speed value after '#', e.g. "CMD_TURN_LEFT#8".
         # Relax (and other non-motion commands) are sent without a speed.
         speed = int(speed_override) if speed_override is not None else int(getattr(self, "move_speed", 8))
@@ -926,9 +972,9 @@ class DogLogicMixin:
 
         payload = cmd_str + "\n" if cmd_str == CMD.CMD_RELAX else f"{cmd_str}#{speed}\n"
 
+        # Allow control if the control channel is OK, even if video isn't (e.g. blind control or testing)
         if (
-            not self.use_dog_video
-            or self.dog_client is None
+            self.dog_client is None
             or not getattr(self.dog_client, "tcp_flag", False)
             or not self.server_control_ok
         ):

@@ -22,6 +22,11 @@ Description:
                 configurable thresholds, and warning signals (LED + Buzzer).
 
 Version Control:
+    v1.3.0  (2026-02-08 09:56)    : Multi-client control socket (5001) with owner arbitration.
+        - Accept and serve multiple concurrent control clients with per-client handler threads.
+        - Route telemetry/query replies to requesting socket (not global shared connection).
+        - Add control-owner guard for write/actuation commands; allow STOP/RELAX safety override.
+        - Preserve legacy proprietary MJPEG path on 8001 for original Freenove clients.
     v1.2.1  (2026-02-02 20:31)    : Make CMD_ATTITUDE bidirectional (query + set).
     v1.2.0 - Fault-tolerant server sockets + health monitoring (2026-01-14)
         - Do not close LISTEN sockets after accept; allow clients to reconnect
@@ -46,6 +51,7 @@ Version Control:
 Revision History:
     Date        | Version | Author    | Changes
     ------------|---------|-----------|-----------------------------------------------
+    2026-02-08  | 1.3.0   | Codex     | Multi-client 5001 + owner arbitration (safe write path)
     2026-01-14  | 1.2.0   | Copilot   | Fault-tolerant ports + health monitoring
     2025-12-21  | 1.1.1   | Freenove  | Added CMD_STOP_PWM, client command logging, FPS/frame size telemetry
     2025-12-21  | 1.1.0   | Freenove  | Battery debouncing & warning signals
@@ -143,6 +149,33 @@ MOTION_COMMANDS = {
     cmd.CMD_TURN_RIGHT,
 }
 
+# Multi-client control (5001) policy:
+# - Telemetry/read commands can be served per connection.
+# - Actuation/write commands are accepted only from the current control owner.
+# - Safety commands (STOP/RELAX/STOP_PWM) are accepted from any client.
+CTRL_OWNER_TIMEOUT_SEC = 8.0
+CTRL_WRITE_COMMANDS = {
+    cmd.CMD_MOVE_FORWARD,
+    cmd.CMD_MOVE_BACKWARD,
+    cmd.CMD_MOVE_LEFT,
+    cmd.CMD_MOVE_RIGHT,
+    cmd.CMD_TURN_LEFT,
+    cmd.CMD_TURN_RIGHT,
+    cmd.CMD_HEAD,
+    cmd.CMD_HEIGHT,
+    cmd.CMD_HORIZON,
+    cmd.CMD_CALIBRATION,
+    cmd.CMD_BALANCE,
+    cmd.CMD_LED,
+    cmd.CMD_LED_MOD,
+    cmd.CMD_BUZZER,
+}
+CTRL_SAFETY_OVERRIDE_COMMANDS = {
+    cmd.CMD_MOVE_STOP,
+    cmd.CMD_RELAX,
+    cmd.CMD_STOP_PWM,
+}
+
 class Server:
 
     def __init__(self):
@@ -179,16 +212,84 @@ class Server:
         self._last_reopen_attempt_ts = 0.0
         self._video_client_connected = False
         self._ctrl_client_connected = False
+        self._ctrl_client_count = 0
         self._last_video_frame_ts = 0.0
         self._last_ctrl_rx_ts = 0.0
         self._video_disconnects = 0
         self._ctrl_disconnects = 0
         self._camera_failures = 0
+        self._ctrl_clients = {}
+        self._ctrl_clients_lock = threading.Lock()
+        self._control_state_lock = threading.Lock()
+        self._control_owner_id = None
+        self._control_owner_addr = None
+        self._control_owner_last_ts = 0.0
 
     def _fmt_age(self, ts):
         if not ts:
             return "n/a"
         return f"{(time.time() - ts):.1f}s"
+
+    def _client_id(self, addr):
+        try:
+            return f"{addr[0]}:{addr[1]}"
+        except Exception:
+            return str(addr)
+
+    def _register_ctrl_client(self, client_id, conn):
+        with self._ctrl_clients_lock:
+            self._ctrl_clients[client_id] = conn
+            self._ctrl_client_count = len(self._ctrl_clients)
+            self._ctrl_client_connected = self._ctrl_client_count > 0
+
+    def _unregister_ctrl_client(self, client_id):
+        with self._ctrl_clients_lock:
+            try:
+                self._ctrl_clients.pop(client_id, None)
+            except Exception:
+                pass
+            self._ctrl_client_count = len(self._ctrl_clients)
+            self._ctrl_client_connected = self._ctrl_client_count > 0
+            if self._control_owner_id == client_id:
+                self._control_owner_id = None
+                self._control_owner_addr = None
+                self._control_owner_last_ts = 0.0
+
+    def _set_control_order(self, order_data, seq, raw):
+        with self._control_state_lock:
+            self.control.order = list(order_data)
+            self.control.order_seq = seq
+            self.control.last_rx_seq = seq
+            self.control.last_rx_raw = raw
+            self.control.last_rx_ts = time.time()
+            self.control.timeout = time.time()
+
+    def _touch_control_owner(self, client_id, client_addr):
+        now = time.time()
+        stale = (now - float(self._control_owner_last_ts or 0.0)) > CTRL_OWNER_TIMEOUT_SEC
+        if self._control_owner_id is None or stale:
+            self._control_owner_id = client_id
+            self._control_owner_addr = client_addr
+            self._control_owner_last_ts = now
+            return True
+        if self._control_owner_id == client_id:
+            self._control_owner_last_ts = now
+            self._control_owner_addr = client_addr
+            return True
+        return False
+
+    def _is_control_write_cmd(self, data):
+        cmd0 = data[0] if data else ""
+        if cmd0 == cmd.CMD_ATTITUDE and len(data) >= 4:
+            return True
+        return cmd0 in CTRL_WRITE_COMMANDS or cmd0 in CTRL_SAFETY_OVERRIDE_COMMANDS
+
+    def _authorize_control_write(self, client_id, client_addr, data):
+        cmd0 = data[0] if data else ""
+        if cmd0 in CTRL_SAFETY_OVERRIDE_COMMANDS:
+            return True
+        ok = self._touch_control_owner(client_id, client_addr)
+        return ok
 
     def _is_socket_open(self, sock):
         try:
@@ -223,7 +324,7 @@ class Server:
                 self.server_socket1.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
                 self.server_socket1.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 self.server_socket1.bind((HOST, 5001))
-                self.server_socket1.listen(1)
+                self.server_socket1.listen(8)
                 self.server_socket1.settimeout(1.0)
                 print("[HEALTH] Control port 5001 LISTEN re-opened (clients may reconnect).")
             except Exception as e:
@@ -294,7 +395,8 @@ class Server:
                     print(
                         "[HEALTH] "
                         f"control: {'LISTEN' if c_listen else 'DOWN'} "
-                        f"| client={'YES' if self._ctrl_client_connected else 'NO'} "
+                        f"| clients={int(getattr(self, '_ctrl_client_count', 0) or 0)} "
+                        f"| owner={self._control_owner_id or 'none'} "
                         f"| last_rx={self._fmt_age(self._last_ctrl_rx_ts)} "
                         f"| disconnects={self._ctrl_disconnects}"
                     )
@@ -393,11 +495,31 @@ class Server:
         self._ensure_battery_thread()
 
     def turn_off_server(self):
+        # Close video connection (if present)
         try:
-            self.connection.close()
-            self.connection1.close()
-        except :
-            print ('\n'+"No client connection")
+            if getattr(self, "connection", None) is not None:
+                self.connection.close()
+        except Exception:
+            pass
+        # Close all control client sockets
+        try:
+            with self._ctrl_clients_lock:
+                for _cid, c in list(self._ctrl_clients.items()):
+                    try:
+                        c.close()
+                    except Exception:
+                        pass
+                self._ctrl_clients.clear()
+                self._ctrl_client_count = 0
+                self._ctrl_client_connected = False
+        except Exception:
+            pass
+        # Backward compatibility field
+        try:
+            if getattr(self, "connection1", None) is not None:
+                self.connection1.close()
+        except Exception:
+            pass
 
     def reset_server(self):
         self.turn_off_server()
@@ -512,7 +634,7 @@ class Server:
                 self.battery_voltage[i]=v
             command=cmd.CMD_POWER+'#'+str(max(self.battery_voltage))+"\n"
             self.send_data(connect,command)
-            self.sednRelaxFlag()
+            self.sednRelaxFlag(connect)
             self.battery_reminder(source="cmd_power")
         except Exception as e:
             print(e)
@@ -620,60 +742,47 @@ class Server:
                 pass
             print(f"Buzzer warning error: {e}")
     
-    def sednRelaxFlag(self):
+    def sednRelaxFlag(self, connect=None):
         if self.control.move_flag!=2:
             command=cmd.CMD_RELAX+"#"+str(self.control.move_flag)+"\n"
-            self.send_data(self.connection1,command)
+            if connect is None:
+                connect = getattr(self, "connection1", None)
+            if connect is not None:
+                self.send_data(connect,command)
             self.control.move_flag= 2
     def receive_instruction(self):
         def _ts_ms():
             now = time.time()
             return time.strftime('%H:%M:%S', time.localtime(now)) + f".{int((now % 1) * 1000):03d}"
 
-        thread_led = None
-
-        # Keep the control port alive across client reconnects.
-        while self.tcp_flag:
+        def _handle_ctrl_client(conn, client_addr):
+            client_id = self._client_id(client_addr)
+            thread_led = None
+            recv_buffer = ""
+            self.connection1 = conn  # Backward compatibility for legacy helpers.
+            self._register_ctrl_client(client_id, conn)
+            print(f"[CTRL] client connected from {client_addr} ({client_id})")
             try:
                 try:
-                    self.connection1, self.client_address1 = self.server_socket1.accept()
-                except socket.timeout:
-                    continue
-                except Exception as e:
-                    if self.tcp_flag:
-                        print(f"[CTRL] accept failed: {e} (will retry)")
-                        print("[CTRL] Recovery: waiting for next client; port 5001 should stay LISTEN.")
-                        time.sleep(0.5)
-                        continue
-                    break
-
-                print(f"[CTRL] client connected from {self.client_address1}")
-                self._ctrl_client_connected = True
-                try:
-                    self.connection1.settimeout(1.0)
+                    conn.settimeout(1.0)
                 except Exception:
                     pass
 
-                recv_buffer = ""
-
                 while self.tcp_flag:
                     try:
-                        chunk = self.connection1.recv(1024)
+                        chunk = conn.recv(1024)
                         if not chunk:
                             break
                         allData = chunk.decode('utf-8', errors='ignore')
                     except socket.timeout:
                         continue
                     except Exception as e:
-                        print(f"[CTRL] recv error: {e}")
-                        print("[CTRL] Recovery: dropping client and returning to LISTEN on 5001")
+                        print(f"[CTRL] recv error ({client_id}): {e}")
                         break
 
                     if not allData:
                         break
 
-                    # TCP is a stream: a recv() can contain partial commands or multiple commands.
-                    # Buffer until we have full '\n'-terminated command lines.
                     recv_buffer += allData
                     while '\n' in recv_buffer:
                         oneCmd, recv_buffer = recv_buffer.split('\n', 1)
@@ -682,23 +791,21 @@ class Server:
                             continue
 
                         self._last_ctrl_rx_ts = time.time()
-
                         self._cmd_seq += 1
                         seq = self._cmd_seq
 
                         _cmd0 = oneCmd.split('#', 1)[0]
                         if DEBUG_COMMAND_SEQUENCE and (SEQUENCE_INCLUDE_SUPPRESSED or _cmd0 not in SUPPRESS_COMMAND_LOGS):
-                            print(f"[RX { _ts_ms() }] seq={seq} raw='{oneCmd}'")
+                            print(f"[RX {_ts_ms()}] client={client_id} seq={seq} raw='{oneCmd}'")
 
                         if _cmd0 not in SUPPRESS_COMMAND_LOGS:
-                            print(f"📥 Received: {oneCmd}")
+                            print(f"📥 [{client_id}] Received: {oneCmd}")
 
                         data = oneCmd.split("#")
                         if data is None or data[0] == '':
                             continue
 
                         # Low-battery lockout: keep the dog in power-save mode.
-                        # Allow only battery/sensor queries and explicit RELAX/STOP_PWM.
                         if self._low_battery_active:
                             allow = {
                                 cmd.CMD_POWER,
@@ -712,19 +819,25 @@ class Server:
                                 now = time.time()
                                 if (now - self._last_low_bat_ignore_ts) >= 2.0:
                                     self._last_low_bat_ignore_ts = now
-                                    print(f"[BAT] low-battery lockout: ignoring {data[0]}")
+                                    print(f"[BAT] low-battery lockout: ignoring {data[0]} from {client_id}")
                                 continue
 
-                        # Log the command being processed (suppress very frequent/noisy commands).
+                        # Write command ownership guard.
+                        if self._is_control_write_cmd(data):
+                            if not self._authorize_control_write(client_id, client_addr, data):
+                                owner = self._control_owner_id or "none"
+                                if data[0] not in SUPPRESS_COMMAND_LOGS:
+                                    print(f"[CTRL] reject non-owner write from {client_id}; owner={owner}; cmd={data[0]}")
+                                self.send_data(conn, f"CMD_BUSY#OWNER:{owner}\n")
+                                continue
+
                         if data[0] not in SUPPRESS_COMMAND_LOGS:
-                            print(f"📋 Processing command: {data[0]}", end='')
+                            print(f"📋 [{client_id}] Processing command: {data[0]}", end='')
                             if len(data) > 1:
                                 print(f" with params: {data[1:]}")
                             else:
                                 print()
 
-                        # Provide brief, human-readable details for Turn Left.
-                        # Example incoming payload: CMD_TURN_LEFT#8
                         if data[0] == cmd.CMD_TURN_LEFT:
                             raw_speed = data[1] if len(data) > 1 else ''
                             try:
@@ -732,12 +845,8 @@ class Server:
                                 speed_note = f"speed={parsed_speed} (raw='{raw_speed}')"
                             except Exception:
                                 speed_note = f"speed=<invalid> (raw='{raw_speed}')"
-                            print(
-                                f"↩️  TURN_LEFT details: {speed_note}; dispatched to Control via self.control.order"
-                            )
+                            print(f"↩️  TURN_LEFT details: {speed_note}; dispatched to Control via self.control.order")
 
-                        # Behavior change (2026-01-16): CMD_RELAX forces RELAX (no toggle).
-                        # Emit a short beep on receipt so the operator gets immediate feedback.
                         if data[0] == cmd.CMD_RELAX:
                             try:
                                 self.buzzer.run('1')
@@ -769,32 +878,19 @@ class Server:
                             thread_led.start()
                         elif cmd.CMD_HEAD in data:
                             if len(data) > 1 and data[1] != '':
-                                self.servo.setServoAngle(15, int(data[1])) #? Head servo on channel 15,
+                                self.servo.setServoAngle(15, int(data[1]))
                             else:
                                 print("⚠️  CMD_HEAD ignored: missing angle parameter")
                         elif cmd.CMD_SONIC in data:
                             command = cmd.CMD_SONIC + '#' + str(self.sonic.getDistance()) + "\n"
-                            self.send_data(self.connection1, command)
+                            self.send_data(conn, command)
                         elif cmd.CMD_POWER in data:
-                            self.measuring_voltage(self.connection1)
+                            self.measuring_voltage(conn)
                         elif cmd.CMD_STOP_PWM in data:
-                            self.control.order = [cmd.CMD_STOP_PWM, '', '', '', '']
-                            self.control.order_seq = seq
-                            self.control.last_rx_seq = seq
-                            self.control.last_rx_raw = oneCmd
-                            self.control.last_rx_ts = time.time()
-                            self.control.timeout = time.time()
+                            self._set_control_order([cmd.CMD_STOP_PWM, '', '', '', ''], seq, oneCmd)
                         elif cmd.CMD_ATTITUDE in data:
-                            # Bidirectional behavior:
-                            # - CMD_ATTITUDE#roll#pitch#yaw => set posture
-                            # - CMD_ATTITUDE               => query IMU (roll/pitch/yaw)
                             if len(data) >= 4:
-                                self.control.order = data
-                                self.control.order_seq = seq
-                                self.control.last_rx_seq = seq
-                                self.control.last_rx_raw = oneCmd
-                                self.control.last_rx_ts = time.time()
-                                self.control.timeout = time.time()
+                                self._set_control_order(data, seq, oneCmd)
                             else:
                                 try:
                                     pitch, roll, yaw = self.control.imu.imuUpdate()
@@ -804,10 +900,8 @@ class Server:
                                     cmd.CMD_ATTITUDE
                                     + f"#ROLL:{roll:.2f}#PITCH:{pitch:.2f}#YAW:{yaw:.2f}\n"
                                 )
-                                self.send_data(self.connection1, command)
+                                self.send_data(conn, command)
                         elif cmd.CMD_WORKING_TIME in data:
-                            # Over-usage protection is configurable in Control.py.
-                            # Default is disabled => rest time is always 0.
                             if 'OVERUSE_PROTECTION_ENABLED' in globals() and OVERUSE_PROTECTION_ENABLED:
                                 active_limit = OVERUSE_ACTIVE_LIMIT_SEC if 'OVERUSE_ACTIVE_LIMIT_SEC' in globals() else 180
                                 if self.control.move_timeout != 0 and self.control.relax_flag == True:
@@ -843,32 +937,43 @@ class Server:
                                     command = cmd.CMD_WORKING_TIME + '#' + str(round(self.control.move_count)) + '#' + str(0) + "\n"
                             else:
                                 command = cmd.CMD_WORKING_TIME + '#' + str(round(self.control.move_count)) + '#' + str(0) + "\n"
-                            self.send_data(self.connection1, command)
+                            self.send_data(conn, command)
                         else:
-                            self.control.order = data
-                            self.control.order_seq = seq
-                            self.control.last_rx_seq = seq
-                            self.control.last_rx_raw = oneCmd
-                            self.control.last_rx_ts = time.time()
-
-                            # Record the most recent motion command even if a STOP comes soon after.
+                            self._set_control_order(data, seq, oneCmd)
                             if data[0] in MOTION_COMMANDS:
-                                self.control.last_motion_order = (data + ['', '', '', ''])[:5]
-                                self.control.last_motion_seq = seq
-                                self.control.last_motion_rx_ts = time.time()
-
-                            self.control.timeout = time.time()
+                                with self._control_state_lock:
+                                    self.control.last_motion_order = (data + ['', '', '', ''])[:5]
+                                    self.control.last_motion_seq = seq
+                                    self.control.last_motion_rx_ts = time.time()
             finally:
                 try:
-                    if getattr(self, 'connection1', None) is not None:
-                        self.connection1.close()
+                    conn.close()
                 except Exception:
                     pass
+                self._unregister_ctrl_client(client_id)
+                if self.tcp_flag:
+                    self._ctrl_disconnects += 1
+                    print(f"[CTRL] client disconnected: {client_id}; waiting for reconnect ...")
 
-                self._ctrl_client_connected = False
-
-            if self.tcp_flag:
-                self._ctrl_disconnects += 1
-                print("[CTRL] client disconnected; waiting for reconnect ...")
+        # Keep control port alive and accept multiple concurrent clients.
+        while self.tcp_flag:
+            try:
+                try:
+                    conn, client_addr = self.server_socket1.accept()
+                except socket.timeout:
+                    continue
+                except Exception as e:
+                    if self.tcp_flag:
+                        print(f"[CTRL] accept failed: {e} (will retry)")
+                        print("[CTRL] Recovery: waiting for next client; port 5001 should stay LISTEN.")
+                        time.sleep(0.5)
+                        continue
+                    break
+                t = threading.Thread(target=_handle_ctrl_client, args=(conn, client_addr), daemon=True)
+                t.start()
+            except Exception as e:
+                if self.tcp_flag:
+                    print(f"[CTRL] handler spawn error: {e}")
+                    time.sleep(0.2)
 if __name__ == '__main__':
     pass

@@ -1,0 +1,68 @@
+<!doctype html>
+<!--
+Monitor Page (WebRTC Video + DataChannel Telemetry)
+Version: 2026.02.07-1
+Revision History:
+  2026-02-07 - Initial version.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>RobotDog Monitor</title>
+  <style>
+    body{margin:0;background:#0b1020;color:#e8ecf6;font-family:system-ui,Segoe UI,Arial,sans-serif}
+    .wrap{display:grid;grid-template-columns:2fr 1fr;gap:10px;padding:10px}
+    .card{background:#121a30;border:1px solid #263350;border-radius:10px;padding:10px}
+    iframe{width:100%;height:70vh;border:0;border-radius:8px;background:#000}
+    pre{white-space:pre-wrap;word-break:break-word}
+    button{padding:8px 10px;border-radius:8px;border:0;background:#2f7cff;color:#fff}
+    input{width:100%;padding:8px;border-radius:8px;border:1px solid #33466f;background:#0d152a;color:#fff}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h3>WebRTC Monitor Video</h3>
+      <iframe id="player" src="http://192.168.0.198:8889/robotdog"></iframe>
+    </div>
+    <div class="card">
+      <h3>DataChannel Telemetry</h3>
+      <label>Gateway URL</label>
+      <input id="gw" value="http://192.168.0.198:8787" />
+      <button id="connect" style="margin-top:8px">Connect</button>
+      <pre id="log">Idle.</pre>
+    </div>
+  </div>
+  <script>
+    const log = (m) => document.getElementById('log').textContent = `${new Date().toLocaleTimeString()} ${m}\n` + document.getElementById('log').textContent;
+
+    async function connectDC() {
+      const gw = document.getElementById('gw').value.trim();
+      const pc = new RTCPeerConnection();
+      const dc = pc.createDataChannel('control');
+      dc.onmessage = (e) => log(`RX ${e.data}`);
+      dc.onopen = () => log('DataChannel open (monitor role, no authority token).');
+      dc.onclose = () => log('DataChannel closed.');
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      const resp = await fetch(`${gw}/offer`, {
+        method: 'POST',
+        headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({
+          sdp: pc.localDescription.sdp,
+          type: pc.localDescription.type,
+          peer_id: `monitor-${Date.now()}`
+        })
+      });
+      const ans = await resp.json();
+      await pc.setRemoteDescription(ans);
+      log(`Connected, authority=${ans.authority}`);
+    }
+
+    document.getElementById('connect').addEventListener('click', () => {
+      connectDC().catch(e => log(`ERR ${e}`));
+    });
+  </script>
+</body>
+</html>

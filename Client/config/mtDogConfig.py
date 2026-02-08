@@ -9,10 +9,14 @@
  Shared configuration values for the mt* Mac client modules.
 
  Revision History
- v1.01 (2026-01-30)          : Client camera preference
-	 • Add client camera index order and retry interval.
+ v1.04 (2026-02-08 10:18)    : Fix SFU host IP mismatch
+	 • Use DOG_DEFAULT_IP for SFU_HOST to ensure video stream matches command IP.
+ v1.03 (2026-02-07)          : SFU low-latency video backend defaults
+	 • Add selectable video backend and SFU stream profile settings for mtDogMain.
  v1.02 (2026-02-01)          : YOLO dual-model defaults
 	 • Add default confidence thresholds and dual-model FPS cap.
+ v1.01 (2026-01-30)          : Client camera preference
+	 • Add client camera index order and retry interval.
 ===============================================================================
 """
 
@@ -39,3 +43,21 @@ YOLO_MT_BALL_CONF_DEFAULT = 0.10
 
 # Cap inference rate to protect UI responsiveness (0/None disables capping)
 YOLO_DUAL_CAP_FPS_DEFAULT = 10.0
+
+# Main video backend selection for mtDogMain:
+# - "legacy_socket": Pi direct JPEG socket on DOG_VIDEO_PORT (original path).
+# - "sfu_rtsp": pull H264 stream from SFU RTSP path (lower latency + higher resolution).
+VIDEO_BACKEND = "sfu_rtsp"
+
+# SFU defaults for low-latency H264 ingest/playback pipeline.
+SFU_HOST = DOG_DEFAULT_IP
+SFU_RTSP_PORT = 8554
+SFU_STREAM_PATH = "robotdog"
+SFU_RTSP_TRANSPORT = "tcp"  # OpenCV/FFmpeg generally stable with TCP over LAN.
+SFU_RTSP_URL = f"rtsp://{SFU_HOST}:{SFU_RTSP_PORT}/{SFU_STREAM_PATH}"
+
+# Preferred source profile (publisher side target; UI/diagnostics reference).
+VIDEO_TARGET_WIDTH = 1280
+VIDEO_TARGET_HEIGHT = 720
+VIDEO_TARGET_FPS = 30
+VIDEO_TARGET_BITRATE = 3500000

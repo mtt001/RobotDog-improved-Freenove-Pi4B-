@@ -10,6 +10,9 @@
      Server check + reconnect controller extracted from mtDogMain.py / ui_event_handlers.py.
      Owns background server check thread and Dog/Mac reconnect flow.
 
+ v1.01  (2026-02-07 20:42)    : Integrate selected video backend probe/init
+     • Reconnect now validates selected video path (SFU RTSP or legacy socket).
+     • Close/init pluggable video source during Dog↔Mac mode switch.
  v1.00  (2026-01-31 23:15)    : Initial server/reconnect controller extraction
      • Move server check thread start/stop and try_reconnect logic into controller.
 ===============================================================================
@@ -54,6 +57,10 @@ class ServerReconnectController:
         if host.use_dog_video:
             print("[RECONNECT] Dog→Mac.")
             host.use_dog_video = False
+            try:
+                host._close_dog_video_source()
+            except Exception:
+                pass
             host.shutdown_dog_client()
             host.server_video_ok = False
             host.server_control_ok = False
@@ -78,17 +85,24 @@ class ServerReconnectController:
 
         ip_ok = host.ping_ip(host.ip)
         ctrl_ok = host.test_tcp_port(host.ip, host.control_port)
+        try:
+            video_ok = bool(host._probe_selected_video_path())
+        except Exception:
+            video_ok = False
 
         host.server_ip_ok = ip_ok
         host.server_control_ok = ctrl_ok
+        host.server_video_ok = video_ok
 
-        if not (ip_ok and ctrl_ok):
+        if not (ip_ok and ctrl_ok and video_ok):
             host.update_status_ui()
             host.reconnect_in_progress = False
             return
 
         try:
             host.start_dog_client()
+            if not host._init_dog_video_source():
+                raise RuntimeError("video source init failed")
             host.use_dog_video = True
             host.schedule_dog_entry_beep()
         except Exception as e:

@@ -10,6 +10,9 @@
      Frame update controller extracted from mtDogMain.py (CameraWindow).
      Handles per-frame capture, overlays, and detection/test-mode updates.
 
+ v1.05  (2026-02-07 20:42)    : Add pluggable Dog video source path
+     • Read Dog video from `host.video_source` when available (SFU RTSP backend).
+     • Keep legacy `dog_client.image` path as fallback for compatibility.
  v1.04  (2026-02-02 20:31)    : Update IMU message pane per frame.
  v1.03  (2026-02-01)          : YOLO refine mask display
      • Feed dual-YOLO ball refinement mask into the existing mask window.
@@ -80,21 +83,34 @@ class FrameUpdateController:
 
         self._update_display_fps()
 
-        # Dog video
+        # Dog video (legacy socket or SFU RTSP backend)
         if host.use_dog_video and host.dog_client is not None:
-            with host.dog_client.image_lock:
-                if isinstance(host.dog_client.image, np.ndarray):
-                    current = host.dog_client.image.copy()
-                    if host.last_dog_frame is None:
-                        new_dog_frame = True
-                    else:
-                        new_dog_frame = not np.array_equal(current, host.last_dog_frame)
-                    host.last_dog_frame = current
-                    frame = current
-                    if new_dog_frame:
-                        host.dog_has_recent_frame = True
-                        host.dog_last_frame_time = time.time()
-                        host.video_stall = False
+            src = getattr(host, "video_source", None)
+            if src is not None:
+                vf = src.read()
+                frame = vf.frame
+                new_dog_frame = bool(vf.is_new and frame is not None)
+                if new_dog_frame:
+                    host.last_dog_frame = frame.copy()
+                    host.dog_has_recent_frame = True
+                    host.dog_last_frame_time = float(vf.timestamp or time.time())
+                    host.video_stall = False
+                if vf.error:
+                    host.video_source_last_error = str(vf.error)
+            else:
+                with host.dog_client.image_lock:
+                    if isinstance(host.dog_client.image, np.ndarray):
+                        current = host.dog_client.image.copy()
+                        if host.last_dog_frame is None:
+                            new_dog_frame = True
+                        else:
+                            new_dog_frame = not np.array_equal(current, host.last_dog_frame)
+                        host.last_dog_frame = current
+                        frame = current
+                        if new_dog_frame:
+                            host.dog_has_recent_frame = True
+                            host.dog_last_frame_time = time.time()
+                            host.video_stall = False
 
             if frame is None:
                 now2 = time.time()

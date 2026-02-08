@@ -4,6 +4,10 @@
 
 `smartdog` is a shell function that activates the Freenove Robot Dog client Python virtual environment and navigates to the Client directory in one command.
 
+It is also available as an executable launcher script at:
+- `/Users/mengtatsai/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/smartdog`
+- symlinked to `/opt/homebrew/bin/smartdog`
+
 ---
 
 ## Usage
@@ -12,6 +16,13 @@ From **any directory**, simply type:
 
 ```bash
 smartdog
+```
+
+Run a one-shot command inside the same venv/context:
+
+```bash
+smartdog python3 -V
+smartdog python3 mtDogMain.py
 ```
 
 ### What You'll See
@@ -182,6 +193,5 @@ Then run `smartdog` again.
 - Version: 1.1
 - Maintainer: MT (User) with GitHub Copilot assistance
 - Status: Production ready
-
 
 

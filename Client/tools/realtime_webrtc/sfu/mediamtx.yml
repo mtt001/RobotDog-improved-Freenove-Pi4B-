@@ -1,0 +1,31 @@
+# MediaMTX config for low-latency fanout
+# Version: 2026.02.07-1
+# Notes:
+# - relay only (no transcoding)
+# - WebRTC enabled for browser compatibility
+
+logLevel: info
+
+rtspAddress: :8554
+webrtc: yes
+webrtcAddress: :8889
+webrtcEncryption: no
+
+# Use UDP-first for low latency
+protocols: [udp, tcp]
+
+# ICE candidates for LAN; add public/STUN/TURN as needed for WAN
+webrtcAdditionalHosts:
+  - 192.168.0.198
+
+# Keep buffers short for control responsiveness
+writeQueueSize: 1024
+udpMaxPayloadSize: 1200
+
+paths:
+  robotdog:
+    # Publisher is external (Pi)
+    source: publisher
+    # Readers can attach from multiple clients simultaneously
+    readUser: ""
+    readPass: ""

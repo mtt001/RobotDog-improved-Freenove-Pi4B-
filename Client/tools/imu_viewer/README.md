@@ -1,139 +1,197 @@
-# IMU Dog Viewer (Live from Pi)
+# IMU Viewer (WebRTC-First) Runbook
 
-## Description
-Minimal 3D dog viewer that animates pitch, roll, and yaw using live IMU data from the Raspberry Pi Server.
+README Version: `2026.02.07-15`  
+Last Updated: `2026-02-07 18:59:09 CST`
+
+This document is the operational guide for `Demo_IMU_server.py` and the Live View stack (Pi publisher + MediaMTX SFU + browser viewer).
+
+## Quick Usage (Start Here)
+
+### A) One command (recommended)
+```bash
+cd /Users/mengtatsai/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Client/tools/imu_viewer
+./start_live_view.sh
+```
+
+What this does:
+- Starts SFU (`mediamtx`) on Mac (`192.168.0.198`)
+- Syncs and starts Pi publisher (`robotdog` path)
+- Starts proxy (`Demo_IMU_server.py`) in WebRTC-first mode
+- Opens browser at `http://127.0.0.1:8080/simple`
+
+### B) Verify immediately
+```bash
+curl -s http://127.0.0.1:8080/video/status
+```
+Expected key fields:
+- `"webrtc": {"ready": true, ...}`
+- `"preferred": "webrtc"`
+
+### C) Open pages
+- `http://127.0.0.1:8080/`
+- `http://127.0.0.1:8080/simple`
+- `http://127.0.0.1:8080/color`
+
+## What This Tool Does
+
+`Demo_IMU_server.py`:
+- Proxies IMU + telemetry commands to Pi control server (`5001`)
+- Serves web UI assets (`/`, `/simple`, `/color`, JS, assets)
+- Exposes stream status endpoint (`/video/status`)
+- Uses WebRTC/SFU as preferred path when `--webrtc-url` is set
+- Falls back to MJPEG bridge (`/video.mjpeg`) when WebRTC is unavailable
+
+## Current Default Runtime Configuration
+
+Source of truth: `Demo_IMU_server.py` `DEFAULT_*` constants.
+
+- Pi host: `192.168.0.32`
+- Pi control port: `5001`
+- Pi video port (MJPEG): `8001`
+- HTTP bind: `0.0.0.0:8080`
+- Default SFU host: `192.168.0.198`
+- Stream path: `robotdog`
+- Default WebRTC URL: `http://192.168.0.198:8889/robotdog/whep`
+
+Important behavior:
+- When WebRTC URL is configured, local H264 pull is auto-disabled by default to avoid Pi camera contention (`ENOSPC`).
+- You can override with `--enable-h264-fallback`.
 
 ## Requirements
-- Pi Server running and reachable on the network
-- Control port 5001 open (Server uses CMD_ATTITUDE)
-- Local Three.js assets (included in `vendor/three/`)
 
-## Quick Start
-From this folder:
+### Raspberry Pi
+- Pi reachable on LAN (example `192.168.0.32`)
+- Robot server running (`main.py` / `smartdog.service`)
+- Control port `5001` open
+- Camera available and not monopolized by unrelated processes
 
+### Mac (viewer/proxy/SFU host)
+- `python3`
+- `ssh`
+- `ffmpeg`
+- `mediamtx` binary (`/opt/homebrew/opt/mediamtx/bin/mediamtx` by default)
+
+## Operational Modes
+
+### Mode 1: Full stack auto-launch (recommended)
+Use `start_live_view.sh`.
+
+### Mode 2: Manual launch
+1. Start SFU
+```bash
+/opt/homebrew/opt/mediamtx/bin/mediamtx /Users/mengtatsai/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Client/tools/realtime_webrtc/sfu/mediamtx.yml
 ```
-python3 Demo_IMU_server.py --pi-host 192.168.0.32 --pi-port 5001 --http-port 8080
+2. Start Pi publisher (example 1280x720)
+```bash
+ssh pi@192.168.0.32 'cd /home/pi/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Client/tools/realtime_webrtc/robot && nohup env SFU_HOST=192.168.0.198 STREAM_PATH=robotdog PUBLISH_MODE=rtsp WIDTH=1280 HEIGHT=720 FPS=30 BITRATE=3500000 ./pi_publish_webrtc.sh >/tmp/pi_publish_webrtc.log 2>&1 < /dev/null &'
+```
+3. Start proxy
+```bash
+cd /Users/mengtatsai/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Client/tools/imu_viewer
+python3 Demo_IMU_server.py
 ```
 
-Or with a full path:
+## Resolution and FPS Control
 
+Primary stream caps are set by Pi publisher environment values:
+- `WIDTH`
+- `HEIGHT`
+- `FPS`
+- `BITRATE`
+
+Examples:
+- 960x540: `WIDTH=960 HEIGHT=540 FPS=30 BITRATE=2000000`
+- 1280x720: `WIDTH=1280 HEIGHT=720 FPS=30 BITRATE=3500000`
+- 1920x1080: `WIDTH=1920 HEIGHT=1080 FPS=30 BITRATE=6000000`
+
+Live title shows actual browser-received dimensions/FPS, for example:
+- `Live View 1280x720, 11.8 fps`
+
+## Key Endpoints
+
+- `GET /imu` IMU JSON (`roll/pitch/yaw`)
+- `GET /telemetry` battery/range
+- `GET /diag` proxy-to-Pi connectivity status
+- `GET /video/status` active stream readiness and preference
+- `GET /video.mjpeg` MJPEG stream fallback
+- `POST /cmd` robot command passthrough (`{"cmd":"CMD_*"}`)
+
+## Health Checks
+
+### Local checks (Mac)
+```bash
+lsof -nP -iTCP:8080 -sTCP:LISTEN
+lsof -nP -iTCP:8889 -sTCP:LISTEN
+lsof -nP -iTCP:8554 -sTCP:LISTEN
+curl -s http://127.0.0.1:8080/diag
+curl -s http://127.0.0.1:8080/video/status
+curl -i -X OPTIONS http://192.168.0.198:8889/robotdog/whep
 ```
-python3 /Users/mengtatsai/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Client/tools/imu_viewer/Demo_IMU_server.py --pi-host 192.168.0.32 --pi-port 5001 --http-port 8080
+
+### Pi checks
+```bash
+ssh pi@192.168.0.32 'pgrep -af "main.py|raspivid|libcamera-vid|rpicam-vid|ffmpeg|pi_publish_webrtc"'
+ssh pi@192.168.0.32 'tail -n 120 /tmp/pi_publish_webrtc.log'
 ```
 
-Open:
-
+### SFU checks
+```bash
+tail -n 120 /tmp/mediamtx.log
 ```
-http://localhost:8080
+Look for:
+- `is publishing to path 'robotdog'`
+- `stream is available and online`
+
+## Troubleshooting Matrix
+
+Symptom: `Stream: Proprietary MJPEG` appears
+- Cause: WebRTC endpoint unavailable or no stream on SFU path
+- Check: `/video/status` `webrtc.error`
+- Fix: restart SFU and Pi publisher, then retry
+
+Symptom: Browser popup says `Pi Server not reachable`
+- Cause: proxy not reachable on `8080` or Pi control connection dropped
+- Check: `curl http://127.0.0.1:8080/diag`
+- Fix: restart proxy, confirm Pi `5001`
+
+Symptom: `ENOSPC` in Pi publisher log
+- Cause: camera contention (multiple camera holders)
+- Fix: kill stale `raspivid/libcamera-vid/rpicam-vid/ffmpeg`, relaunch single publisher
+
+Symptom: `Connection refused` to `:8554` or `:8889`
+- Cause: SFU process not running on Mac
+- Fix: restart `mediamtx`; verify listeners with `lsof`
+
+Symptom: stream starts then drops (`Broken pipe`)
+- Cause: transient network disconnect or SFU restart
+- Fix: keep publisher auto-retry enabled (default in current script), verify SFU uptime
+
+## Recovery Runbook
+
+Use this when state is inconsistent:
+```bash
+cd /Users/mengtatsai/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Client/tools/imu_viewer
+./start_live_view.sh
+curl -s http://127.0.0.1:8080/video/status
 ```
 
-## Pages
-- `/` Landing page with diagnostics and version.
-- `/simple` Simple box model.
-- `/color` Color (pug) model with load status.
+If still failing, collect and inspect:
+```bash
+tail -n 120 /tmp/mediamtx.log
+tail -n 120 /tmp/imu_proxy.log
+ssh pi@192.168.0.32 'tail -n 120 /tmp/pi_publish_webrtc.log'
+```
 
-## Diagnostics
-The HUD shows:
-- Proxy status, last error, and last OK age.
-- Proxy version and timestamp (from `/version`).
-- Model load status on `/color`.
+## Files and Roles
+
+- `Demo_IMU_server.py`: HTTP proxy + IMU bridge + stream status API
+- `live_video.js`: browser-side stream selector (WebRTC/H264/MJPEG)
+- `start_live_view.sh`: one-command orchestrator
+- `../realtime_webrtc/sfu/mediamtx.yml`: SFU config
+- `../realtime_webrtc/robot/pi_publish_webrtc.sh`: Pi publisher
 
 ## Notes
-- The viewer polls `/imu` at 10 Hz.
-- To expose the page to other devices, use `--listen 0.0.0.0` and open `http://<your-mac-ip>:8080`.
-- The Server control port (5001) accepts one client at a time. Disconnect the main Client UI before using this viewer.
-- IMU data is read via `CMD_ATTITUDE` without parameters.
 
-## Model
-- Default: Colored Pug model (OBJ/MTL) from “Farm Animals by @Quaternius” (CC0).
-- Fallback: Simple box-based dog if OBJ/MTL fails to load.
-- License: `assets/quaternius_pug/License.txt`
-
-## File Overview
-- `Demo_IMU_server.py`: HTTP server that serves pages and proxies IMU queries to the Pi.
-- `index.html`: Landing page with mode selection and diagnostics.
-- `index_simple.html`: Simple box model viewer page.
-- `index_color.html`: Color model viewer page with load status.
-- `app.js`: Main JavaScript for the viewer, handling IMU polling, model updates, and diagnostics.
-- `app_simple.js`: JavaScript for the simple box model viewer.
-- `app_color.js`: JavaScript for the color model viewer, including model load status and diagnostics.
-- `vendor/three/`: Local copy of Three.js and loaders to avoid CDN issues.
-
-    # Note: The IMU viewer is a standalone tool that runs an HTTP server to serve the viewer pages and proxy IMU data from the Pi. It is separate from the main Client UI and should be run independently.
-    # The viewer connects to the Pi's control port (5001) to send `CMD_ATTITUDE` commands and receive IMU data, which it uses to animate the 3D model. The viewer also includes diagnostics and will display proxy status, errors, and model load status on the page.
-    # To use the viewer, ensure the Pi Server is running and accessible, then run `Demo_IMU_server.py` with the appropriate host and port parameters. Open the provided URL in a web browser to see the live IMU data visualized on the 3D dog model.   
-    # Usage: `python3 Demo_IMU_server.py --pi-host <pi-ip> --pi-port 5001 --http-port 8080` 
-    then open `http://localhost:8080` in a browser. If the main Client UI is connected to the Pi, disconnect it first since the control port only allows one client at a time.
-    # The viewer includes two modes: a simple box model and a colored Pug model. The Pug model is loaded from OBJ/MTL files, and if it fails to load, the viewer falls back to the simple box model. The viewer also displays diagnostics such as proxy status, errors, and model load status on the page for troubleshooting.
-    # The IMU data is polled at 10 Hz, and the viewer updates the model's orientation based on the received pitch, roll, and yaw values. This tool is useful for visualizing the robot dog's orientation in real-time based on the IMU data from the Raspberry Pi Server.
-    # Note: Ensure that the Pi Server is running and that the control port (5001) is not being used by another client (like the main Client UI) before starting the IMU viewer, as it requires exclusive access to receive IMU data.
-    # The viewer is designed to be simple and lightweight, using Three.js for rendering the 3D model and standard JavaScript for handling the HTTP requests and model updates. It serves as a useful tool for debugging and visualizing the robot dog's orientation based on the IMU data from the Raspberry Pi Server.
-    # The included Pug model is sourced from Quaternius and is licensed under CC0, allowing for free use and modification. If you want to use a different model, you can replace the OBJ/MTL files in the `assets/quaternius_pug/` directory and update the paths in `app_color.js` accordingly.
-    # The viewer also includes error handling and diagnostics to help troubleshoot issues with the proxy connection or model loading. If the viewer cannot connect to the Pi or receive IMU data, it will display error messages on the page to assist with debugging.
-    # Overall, this IMU viewer provides a real-time visualization of the robot dog's orientation based on the IMU data from the Raspberry Pi Server, making it a valuable tool for development and debugging.
-    # To stop the viewer, simply terminate the `Demo_IMU_server.py` process in the terminal. Terminate the process by pressing `Ctrl+C` in the terminal where it's running. This will shut down the HTTP server and stop the viewer from running.
-    # Note: If you want to run the viewer again, ensure that the previous instance is fully terminated and that the control port (5001) is free before starting a new instance of the viewer.
-    # the Demo_IMU_server.py script will continue running and serving the viewer pages until it is manually stopped. You can have the viewer running in the background while you work on other tasks, and it will continue to display live IMU data from the Pi as long as it is running and connected to the control port.
-
-## Deep Dive: How Everything Works
-
-### 1) End-to-End Data Flow
-1. **Browser loads a viewer page** (`/`, `/simple`, or `/color`).
-2. **Viewer JavaScript starts polling** the proxy endpoints:
-     - `/imu` for live IMU values (roll, pitch, yaw).
-     - `/diag` for connectivity status and the last error.
-     - `/version` for the proxy version/time (so you can verify the running server is up-to-date).
-3. **Proxy connects to the Pi** over TCP and sends `CMD_ATTITUDE` on the control port (default 5001).
-4. **Pi server responds** with a single-line text payload containing IMU values.
-5. **Proxy parses the line** into JSON and returns it to the browser.
-6. **Viewer applies smoothing** and updates the 3D model rotation at render time.
-
-### 2) Proxy Responsibilities (`Demo_IMU_server.py`)
-- **HTTP server**: Serves HTML/JS pages and static assets from this folder.
-- **IMU proxy**: Opens a TCP connection to the Pi and requests IMU data via `CMD_ATTITUDE`.
-- **Parser**: Extracts `roll`, `pitch`, and `yaw` from the Pi response.
-- **Diagnostics**:
-    - `/diag` returns host/port, last error, and last successful timestamp.
-    - `/version` returns a version string and timestamp so you can validate which proxy build is running.
-
-### 3) Pi Control Port Behavior
-- The Pi control port accepts **one client at a time**.
-- If the main Client UI is connected, the viewer cannot connect; `/diag` will show errors.
-- If the Pi is reachable but the server process is not running, `/diag` will show a connection error.
-
-### 4) Viewer Pages and Scripts
-- **Landing page (`/`)**: Shows diagnostics and offers mode selection.
-- **Simple view (`/simple`)**: Uses a lightweight box model for fast loading and minimal assets.
-- **Color view (`/color`)**: Loads OBJ/MTL assets and shows model load status.
-
-### 5) Polling and Rendering Loop
-- **Polling**: JS fetches `/imu` every 100 ms (10 Hz).
-- **Smoothing**: Each frame eases the model toward the latest IMU values to reduce jitter.
-- **Rendering**: Three.js renders at the browser’s refresh rate for smooth animation.
-
-### 6) Offline Detection and Popups
-- If repeated `/imu` requests fail, the viewer shows an **offline popup** with steps to recover:
-    1. Ensure the Pi is powered and on the same network.
-    2. Confirm `--pi-host` and `--pi-port` values.
-    3. Start the Pi server (e.g., `smartdog.sh` or `main.py`).
-    4. Check firewall/router settings.
-
-### 7) Model Loading in Color Mode
-- The viewer loads **MTL first**, then **OBJ**.
-- Progress and errors are displayed in the HUD (Model / Model Err).
-- If load fails, the **placeholder box model** remains visible.
-
-### 8) Common Failure Modes (and Where to Look)
-- **Blank page or no UI**: Check that the proxy is running and serving `/simple` or `/color`.
-- **Status stuck on “starting”**: `/imu` is not returning data; check `/diag`.
-- **Color model not showing**: Check Model status/errors; verify OBJ/MTL files exist under `assets/quaternius_pug/`.
-- **No live data**: Confirm the Pi server is running and that control port 5001 is free.
-
-### 9) Why the Version/Time Matters
-- The `/version` endpoint confirms **which proxy build** is active.
-- The timestamp helps verify you restarted the proxy after making changes.
-
-### 10) Extending the Viewer
-- Replace the OBJ/MTL model by updating `assets/` and the paths in `app_color.js`.
-- Change polling rate or smoothing in the JS files.
-- Add new diagnostics in `Demo_IMU_server.py` and expose them via JSON.
+- A `204` on `OPTIONS /robotdog/whep` means endpoint exists, not necessarily that stream is currently online.
+- `video/status -> webrtc.ready=true` plus SFU path online is the practical condition for live WebRTC playback.
+- Browser tab may need hard reload (`Cmd+Shift+R`) after stack restarts.

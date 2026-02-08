@@ -1,0 +1,46 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Freenove Client launcher:
+# - No args: open an interactive shell with venv activated in Client directory.
+# - With args: run the command inside activated venv in Client directory.
+
+CODE_DIR="/Users/mengtatsai/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code"
+CLIENT_DIR="${CODE_DIR}/Client"
+VENV_DIR="${HOME}/.venvs/freenove-client"
+ACTIVATE="${VENV_DIR}/bin/activate"
+
+if [[ ! -d "${CLIENT_DIR}" ]]; then
+  echo "smartdog: Client directory not found: ${CLIENT_DIR}" >&2
+  exit 1
+fi
+if [[ ! -f "${ACTIVATE}" ]]; then
+  echo "smartdog: venv activate script not found: ${ACTIVATE}" >&2
+  exit 1
+fi
+
+# shellcheck disable=SC1090
+set +u
+source "${ACTIVATE}"
+set -u
+cd "${CLIENT_DIR}"
+
+if [[ $# -gt 0 ]]; then
+  exec "$@"
+fi
+
+echo ""
+echo "╔════════════════════════════════════════════════════════════╗"
+echo "║         Freenove Robot Dog - Client Environment            ║"
+echo "╚════════════════════════════════════════════════════════════╝"
+echo ""
+echo "✓ Virtual environment activated: freenove-client"
+echo "✓ Working directory: $(pwd)"
+echo ""
+echo "Examples:"
+echo "  • python mtDogMain.py"
+echo "  • python tools/imu_viewer/Demo_IMU_server.py"
+echo "  • deactivate"
+echo ""
+
+exec "${SHELL:-/bin/zsh}" -i

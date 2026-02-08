@@ -10,6 +10,8 @@
      Status/HUD controller extracted from ui_event_handlers.py (CameraWindow).
      Builds the bottom-bar HTML string and Dog Video button state.
 
+ v1.01  (2026-02-07 20:42)    : Show SFU stream label in video status line
+     • Status now displays `Video:SFU/<path>` when SFU backend is active.
  v1.00  (2026-01-31 22:55)    : Initial status UI controller extraction
      • Move bottom-bar status string + button color/label logic into controller.
 ===============================================================================
@@ -30,12 +32,15 @@ class StatusUIController:
             return "#00ff44" if ok else "#ff4444"
 
         # Video port color: yellow if STALL, otherwise green/red
+        backend = str(getattr(host, "video_backend", "legacy_socket") or "legacy_socket")
+        video_label = f"Video:{host.video_port}" if backend != "sfu_rtsp" else f"Video:SFU/{getattr(host, 'sfu_stream_path', 'robotdog')}"
+
         if host.video_stall and host.use_dog_video:
             video_color = "#ffff00"
-            video_text = f"Video:{host.video_port}(STALL)"
+            video_text = f"{video_label}(STALL)"
         else:
             video_color = "#00ff44" if host.server_video_ok else "#ff4444"
-            video_text = f"Video:{host.video_port}"
+            video_text = video_label
 
         all_ok = (
             host.server_ip_ok

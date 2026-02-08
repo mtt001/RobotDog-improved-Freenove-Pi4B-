@@ -1,19 +1,27 @@
 # Robot Dog Command Reference
 
-Date: 2026-01-22
+Version: v1.3.0
+Updated: 2026-02-08 10:05 (local time)
 
-This document lists all server-side commands handled by the control socket and how to use them.
+This document lists server-side commands handled on control TCP port `5001`.
 
 ## Transport
+- Control/telemetry TCP: `5001`
+- Video TCP: `8001` (proprietary JPEG stream)
 
-- Control/telemetry TCP: port 5001
-- Video TCP: port 8001 (JPEG stream, length-prefixed frames)
+Control messages are UTF-8 text lines terminated by `\n`:
+- `COMMAND#param1#param2#param3#param4\n`
 
-Control commands are UTF-8 text lines terminated by \n. Fields are separated by #:
+## Multi-Client Policy (v1.3.0)
+- Port `5001` supports **multiple concurrent client connections**.
+- Telemetry/query responses are sent back to the requesting connection.
+- Write/actuation commands are guarded by a **control owner**.
+- Non-owner write command response:
+  - `CMD_BUSY#OWNER:<ip:port>\n`
+- Safety overrides are accepted from any client:
+  - `CMD_MOVE_STOP`, `CMD_RELAX`, `CMD_STOP_PWM`
 
-- Format: COMMAND#param1#param2#param3#param4\n
 ## Command Summary
-
 | Command | Params | Description | Response |
 | --- | --- | --- | --- |
 | CMD_MOVE_STOP | none | Stop motion immediately. | none |
@@ -39,80 +47,18 @@ Control commands are UTF-8 text lines terminated by \n. Fields are separated by 
 | CMD_POWER | none | Request battery voltage. | CMD_POWER#voltage\n |
 | CMD_WORKING_TIME | none | Request working time/overuse info. | CMD_WORKING_TIME#active#rest\n |
 
-## Details and Notes
+## Owner-Arbitration Notes
+- Owner-gated writes include motion, head/body posture writes, LED/buzzer, calibration, and balance.
+- `CMD_ATTITUDE` behavior:
+  - query form (`CMD_ATTITUDE`) is read-only
+  - set form (`CMD_ATTITUDE#roll#pitch#yaw`) is owner-gated write
 
-### Motion commands
-- All motion commands accept a single integer speed parameter.
-- The server does not clamp `speed`; it is used as the step size in gait loops. Larger values update targets faster (quicker/jerkier). Smaller values update targets slower (smoother).
-- Avoid 0 or negative values (they can stall the loop). Default speed is 8.
-- Motion commands are not queued. Each incoming command overwrites the current `order`, so the latest command wins.
-- CMD_MOVE_STOP is applied immediately, but the server may ignore rapid STOP packets right after a move command to smooth joystick noise.
+## Low-Battery Lockout
+When low-battery mode is active, command acceptance is restricted server-side.
+Allowed commands:
+- `CMD_POWER`, `CMD_SONIC`, `CMD_WORKING_TIME`, `CMD_RELAX`, `CMD_STOP_PWM`, `CMD_ATTITUDE`
 
-Examples:
-- CMD_MOVE_FORWARD#8\n
-### Relax and PWM
-- CMD_RELAX forces relax posture (no toggle). Servos remain powered.
-- CMD_STOP_PWM fully disables servo PWM outputs.
-
-Examples:
-- CMD_RELAX\n
-### Head and posture
-- CMD_HEAD uses a single angle in degrees (0-180).
-- CMD_HEIGHT and CMD_HORIZON expect integer values used by the gait controller.
-- CMD_ATTITUDE uses three numeric parameters: roll, pitch, yaw.
-
-Examples:
-- CMD_HEAD#90\n
-### Calibration
-- Update a single leg calibration point and recompute offsets:
-  - CMD_CALIBRATION#one#x#y#z
-  - CMD_CALIBRATION#two#x#y#z
-  - CMD_CALIBRATION#three#x#y#z
-  - CMD_CALIBRATION#four#x#y#z
-- Save current calibration to point.txt:
-  - CMD_CALIBRATION#save
-
-### LEDs
-Format is handled by Led.light(data):
-- mode is a string digit:
-  - 0: off
-  - 1: solid color
-  - 2: RGB wipe loop
-  - 3: theater chase loop
-  - 4: rainbow loop
-  - 5: rainbow cycle loop
-- r/g/b are 0-255 integers.
-
-Example:
-- CMD_LED#1#255#0#0\n (solid red)
-
-### Buzzer
-- CMD_BUZZER#1 turns buzzer on.
-- CMD_BUZZER#0 turns buzzer off.
-
-### Sensors and telemetry
-- CMD_SONIC returns ultrasonic distance as centimeters.
-- CMD_POWER returns the highest of the last 5 ADC samples as voltage (V).
-- CMD_WORKING_TIME returns active time and rest time. If overuse protection is disabled, rest time is 0.
-
-### Low-battery lockout
-Low-battery protection runs continuously on the server (even with no client connected).
-
-Behavior summary:
-- Voltage is sampled from the ADC once per second.
-- Low-battery threshold: 6.1 V.
-- A low-voltage condition is declared only after it stays below the threshold for 3 seconds (debounce).
-- Once confirmed, the server forces a safe posture (CMD_RELAX) immediately, then disables PWM (CMD_STOP_PWM) after 3 seconds.
-- While low voltage persists, the server emits warning signals every 5 seconds (2 short buzzer beeps + 1 red LED flash).
-- The server does not shut down or close ports; it only enforces motion lockout and safety posture.
-
-Command lockout:
-- When low-battery mode is active, only these commands are accepted:
-  - CMD_POWER, CMD_SONIC, CMD_WORKING_TIME, CMD_RELAX, CMD_STOP_PWM
-- All other commands are ignored until voltage recovers above the threshold.
-
-### Socket auto-recovery (ports 5001 and 8001)
-The server runs a health monitor that keeps both LISTEN sockets open:
-- If a LISTEN socket is missing/closed, it auto-reopens ports 8001 (video) and 5001 (control).
-- Health logs print every 15 seconds.
-- Reopen attempts are rate-limited with a 2-second backoff.
+## Socket Auto-Recovery
+Health monitor keeps LISTEN sockets alive:
+- auto-reopen on `5001` and `8001` if listener disappears
+- periodic health logs (when enabled)

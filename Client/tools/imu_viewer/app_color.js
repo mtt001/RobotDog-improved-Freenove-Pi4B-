@@ -3,8 +3,11 @@ IMU Viewer Client (Color)
 Description:
   Three.js color model viewer with IMU polling, diagnostics, and model load status.
 Version:
-  2026.02.07-2
+  2026.02.07-5
 Revision History:
+  2026-02-07 15:14 - Added top-left telemetry line with video FPS overlay.
+  2026-02-07 15:06 - Load live_video.js via safe dynamic import so IMU/telemetry still run if missing.
+  2026-02-07 14:46 - Added live video auto-selection (H264-first, MJPEG fallback).
   2026-02-07 13:39 - Added live telemetry polling for power/range.
 */
 
@@ -23,12 +26,20 @@ const versionEl = document.getElementById('version');
 const versionTimeEl = document.getElementById('versiontime');
 const powerEl = document.getElementById('power');
 const rangeEl = document.getElementById('range');
-const powerTopEl = document.getElementById('powerTop');
-const rangeTopEl = document.getElementById('rangeTop');
+const telemetryTopEl = document.getElementById('telemetryTop');
 const rollEl = document.getElementById('roll');
 const pitchEl = document.getElementById('pitch');
 const yawEl = document.getElementById('yaw');
 const lastOkEl = document.getElementById('lastok');
+let latestBatteryText = '--';
+let latestRangeText = '--';
+let latestFps = 0;
+
+function renderTopTelemetryLine() {
+  if (!telemetryTopEl) return;
+  const fpsText = `${latestFps.toFixed(1)}fps`;
+  telemetryTopEl.textContent = `Power ${latestBatteryText}  Range ${latestRangeText}  ${fpsText}`;
+}
 
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x0e1116);
@@ -204,6 +215,8 @@ function updateTelemetryOverlay(data) {
   const distance = typeof data?.distance_cm === 'number' ? data.distance_cm : null;
   const powerText = battery !== null ? `${battery.toFixed(2)}V` : '--';
   const rangeText = distance !== null ? `${distance.toFixed(2)}cm` : '--';
+  latestBatteryText = powerText;
+  latestRangeText = rangeText;
 
   if (powerEl) {
     powerEl.textContent = powerText;
@@ -211,12 +224,7 @@ function updateTelemetryOverlay(data) {
   if (rangeEl) {
     rangeEl.textContent = rangeText;
   }
-  if (powerTopEl) {
-    powerTopEl.textContent = powerText;
-  }
-  if (rangeTopEl) {
-    rangeTopEl.textContent = rangeText;
-  }
+  renderTopTelemetryLine();
 }
 
 function updateDiag(data) {
@@ -315,6 +323,27 @@ setInterval(pollDiag, 1000);
 setInterval(pollTelemetry, 1000);
 pollVersion();
 pollTelemetry();
+renderTopTelemetryLine();
+window.addEventListener('live-video-fps', (ev) => {
+  latestFps = Number(ev?.detail?.fps || 0);
+  renderTopTelemetryLine();
+});
+async function startLiveVideoSafe() {
+  try {
+    const mod = await import('/live_video.js');
+    if (mod && typeof mod.initLiveVideo === 'function') {
+      mod.initLiveVideo();
+      return;
+    }
+  } catch (e) {
+    // Keep IMU/telemetry UI alive even if live video helper is unavailable.
+  }
+  const liveStatusEl = document.getElementById('liveStatus');
+  if (liveStatusEl) {
+    liveStatusEl.textContent = 'Stream helper unavailable; telemetry still active';
+  }
+}
+startLiveVideoSafe();
 
 function animate() {
   requestAnimationFrame(animate);
