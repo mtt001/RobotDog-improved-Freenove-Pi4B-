@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Robot Pi WebRTC Publisher
-# Version: 2026.02.07-2
+# Version: 2026.02.12-3
 # Revision History:
+#   2026-02-12 17:23 - Added persistent runtime profile override support via `video_publisher_profile.env` so WIDTH/HEIGHT survive refresh/reboot after `/video/config` apply.
 #   2026-02-07 - Add auto-retry loop for transient SFU/publish disconnects.
 #   2026-02-07 - Initial publish script (WHIP primary, RTSP fallback).
 # Usage:
@@ -18,6 +19,15 @@ FPS="${FPS:-30}"
 BITRATE="${BITRATE:-2000000}"
 PUBLISH_MODE="${PUBLISH_MODE:-whip}" # whip|rtsp
 RETRY_SLEEP="${RETRY_SLEEP:-1}"
+RUNTIME_PROFILE_ENV_FILE="${RUNTIME_PROFILE_ENV_FILE:-/home/pi/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Server/color_viewer/video_publisher_profile.env}"
+
+if [ -f "${RUNTIME_PROFILE_ENV_FILE}" ]; then
+  # shellcheck disable=SC1090
+  . "${RUNTIME_PROFILE_ENV_FILE}"
+fi
+
+WIDTH="${WIDTH:-960}"
+HEIGHT="${HEIGHT:-540}"
 
 WHIP_URL="${WHIP_URL:-http://${SFU_HOST}:8889/${STREAM_PATH}/whip}"
 RTSP_URL="${RTSP_URL:-rtsp://${SFU_HOST}:8554/${STREAM_PATH}}"

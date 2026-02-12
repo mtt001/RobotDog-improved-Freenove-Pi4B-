@@ -1,3 +1,10 @@
+/*
+ * Three.js OBJLoader (local module path fix)
+ * Version: 2026.02.10-1
+ * Revision History:
+ *   2026-02-10 16:34 - Use local three.module.js path for browser module loading.
+ */
+
 import {
 	BufferGeometry,
 	FileLoader,
@@ -13,7 +20,7 @@ import {
 	PointsMaterial,
 	Vector3,
 	Color
-} from 'three';
+} from './three.module.js';
 
 // o object_name | g group_name
 const _object_pattern = /^[og]\s*(.+)?/;

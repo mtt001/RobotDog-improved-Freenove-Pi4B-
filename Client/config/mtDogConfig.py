@@ -8,10 +8,18 @@
 
  Shared configuration values for the mt* Mac client modules.
 
- Revision History
- v1.04 (2026-02-08 10:18)    : Fix SFU host IP mismatch
+Revision History
+v1.07 (2026-02-09 21:31)    : Add IMU web viewer defaults for mtDogMain quick-launch
+	 • Add `IMU_VIEWER_URL` (default Pi-hosted `/webrtc_view.html`) with env override.
+	 • Add `IMU_VIEWER_DIAG_URL` (default Pi telemetry API) for reachability checks.
+v1.06 (2026-02-09 15:15)    : Move SFU default host to Pi for Phase-1 always-on deployment
+	 • Set `SFU_HOST` default to 192.168.0.32 so RTSP/WebRTC paths stay available when Mac is offline.
+v1.05 (2026-02-08 12:18)    : Restore SFU host default and add env override
+	 • Decouple SFU host from DOG_DEFAULT_IP (control host), default back to 192.168.0.198.
+	 • Allow runtime override with environment variable `SFU_HOST`.
+v1.04 (2026-02-08 10:18)    : Fix SFU host IP mismatch
 	 • Use DOG_DEFAULT_IP for SFU_HOST to ensure video stream matches command IP.
- v1.03 (2026-02-07)          : SFU low-latency video backend defaults
+v1.03 (2026-02-07)          : SFU low-latency video backend defaults
 	 • Add selectable video backend and SFU stream profile settings for mtDogMain.
  v1.02 (2026-02-01)          : YOLO dual-model defaults
 	 • Add default confidence thresholds and dual-model FPS cap.
@@ -19,6 +27,8 @@
 	 • Add client camera index order and retry interval.
 ===============================================================================
 """
+
+import os
 
 # Default Dog Pi network settings
 DOG_DEFAULT_IP      = "192.168.0.32"
@@ -50,14 +60,23 @@ YOLO_DUAL_CAP_FPS_DEFAULT = 10.0
 VIDEO_BACKEND = "sfu_rtsp"
 
 # SFU defaults for low-latency H264 ingest/playback pipeline.
-SFU_HOST = DOG_DEFAULT_IP
+# Control channel host (Pi) and SFU host can be different machines.
+SFU_HOST = os.getenv("SFU_HOST", "192.168.0.32")	# Phase-1 default: Pi hosts SFU for always-on operation; allow override with env var.
 SFU_RTSP_PORT = 8554
 SFU_STREAM_PATH = "robotdog"
 SFU_RTSP_TRANSPORT = "tcp"  # OpenCV/FFmpeg generally stable with TCP over LAN.
-SFU_RTSP_URL = f"rtsp://{SFU_HOST}:{SFU_RTSP_PORT}/{SFU_STREAM_PATH}"
+SFU_RTSP_URL = f"rtsp://{SFU_HOST}:{SFU_RTSP_PORT}/{SFU_STREAM_PATH}" 
+	# RTSP is typically more efficient for video streaming than raw TCP sockets, 
+	# especially for H264-encoded frames. OpenCV can directly read from RTSP URLs, 
+	# which simplifies the client implementation and can reduce latency 
+	# compared to receiving JPEG frames over a socket and decoding them manually.
 
 # Preferred source profile (publisher side target; UI/diagnostics reference).
 VIDEO_TARGET_WIDTH = 1280
 VIDEO_TARGET_HEIGHT = 720
 VIDEO_TARGET_FPS = 30
 VIDEO_TARGET_BITRATE = 3500000
+
+# Pi-hosted web IMU viewer defaults (used by mtDogMain quick-launch/status).
+IMU_VIEWER_URL = os.getenv("IMU_VIEWER_URL", f"http://{DOG_DEFAULT_IP}:8080/webrtc_view.html")
+IMU_VIEWER_DIAG_URL = os.getenv("IMU_VIEWER_DIAG_URL", f"http://{DOG_DEFAULT_IP}:8090/api/telemetry")

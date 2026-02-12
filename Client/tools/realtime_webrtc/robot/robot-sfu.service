@@ -1,0 +1,18 @@
+# Version: 2026.02.09-1
+# Revision History:
+#   2026-02-09 - Initial MediaMTX SFU service template for Pi-hosted Phase-1 deployment.
+[Unit]
+Description=RobotDog MediaMTX SFU
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Client/tools/realtime_webrtc/sfu
+ExecStart=/usr/local/bin/mediamtx /home/pi/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Client/tools/realtime_webrtc/sfu/mediamtx.yml
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

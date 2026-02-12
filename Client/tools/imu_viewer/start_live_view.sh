@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
+#
+# Version:
+#   2026.02.11-09
+# Revision History:
+#   2026-02-11 16:57 - Switched launcher/supervisor from `Demo_IMU_server.py` to `color_viewer_server.py` after runtime service rename.
+#   2026-02-07 18:52 - Added one-command Live View launcher flow (SFU + Pi publisher + IMU proxy + browser open).
+#
 # One-command launcher for IMU live view stack:
 # - Starts MediaMTX SFU on Mac
 # - Starts Pi publisher (RTSP ingest to SFU)
-# - Starts Demo_IMU_server.py proxy (WebRTC-first)
+# - Starts color_viewer_server.py proxy (WebRTC-first)
 # - Opens browser page
 #
 # Usage:
@@ -80,13 +87,13 @@ if [[ "$stream_online" -ne 1 ]]; then
 fi
 
 echo "[4/5] Starting IMU proxy (WebRTC-first)"
-pkill -f "Demo_IMU_server.py" >/dev/null 2>&1 || true
+pkill -f "color_viewer_server.py" >/dev/null 2>&1 || true
 pkill -f "imu_proxy_supervisor_loop" >/dev/null 2>&1 || true
 cd "$IMU_DIR"
 nohup bash -lc "
   # imu_proxy_supervisor_loop
   while true; do
-    python3 -u Demo_IMU_server.py \
+    python3 -u color_viewer_server.py \
       --pi-host '$PI' \
       --http-port '$HTTP_PORT' \
       --webrtc-url 'http://${SFU}:8889/${STREAM_PATH}/whep' \

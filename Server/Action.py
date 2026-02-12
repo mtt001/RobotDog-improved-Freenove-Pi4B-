@@ -11,13 +11,18 @@ Description:
     Runs a sequence of robot dog demo motions directly on the server.
     Initializes all servos to 90°, plays per-demo entry cues (2 beeps + 2 LED flashes),
     announces each demo by name, and powers down PWM at the end (3 beeps + 3 flashes).
+    Supports one-shot CLI mode for web-triggered demo execution.
 
 Revision History:
+    2026-02-11 12:54 - Added safe-exit path for one-shot (`--once`) demo mode to avoid intermittent teardown segfaults after completion.
+    2026-02-11 12:13 - Added CLI one-shot mode (`--once --demo <name>`) and demo list output for safe web-triggered execution.
     1.0.0 (2025-12-23) - Added header, startup init, per-demo cues/announcements,
                          final PWM stop and completion cues.
 """
 
+import argparse
 import math
+import os
 import time
 from Control import Control
 from Servo import Servo
@@ -447,13 +452,8 @@ class Action:
             time.sleep(0.02)
         time.sleep(1)
     
-        
-if __name__=='__main__':
-    action = Action()
-    time.sleep(1)
-
-    # Run selected demos (all enabled by default)
-    demos = [
+def _demo_pairs(action: Action):
+    return [
         ("servo_exercise", lambda: action._run_servo_exercise(delay=0.01)),
         ("push_ups", action.push_ups),
         ("helloOne", action.helloOne),
@@ -464,8 +464,43 @@ if __name__=='__main__':
         ("helloTwo", action.helloTwo),
     ]
 
+
+def _demo_names():
+    return ["servo_exercise", "push_ups", "helloOne", "hand", "coquettish", "swim", "yoga", "helloTwo"]
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Robot dog action demo runner")
+    parser.add_argument("--once", action="store_true", help="Run one selected demo once and exit")
+    parser.add_argument("--demo", default="helloOne", help="Demo name for --once mode")
+    parser.add_argument("--list-demos", action="store_true", help="List available demo names and exit")
+    args = parser.parse_args()
+
+    if args.list_demos:
+        for name in _demo_names():
+            print(name)
+        return
+
+    action = Action()
+    time.sleep(1)
+    demos = _demo_pairs(action)
+    demo_map = dict(demos)
+    once_completed = False
+
     try:
+        if args.once:
+            demo_name = (args.demo or "").strip()
+            if demo_name not in demo_map:
+                raise ValueError(f"unknown demo: {demo_name}. choices={','.join(_demo_names())}")
+            print(f"\n▶️  One-shot demo: {demo_name}")
+            action._beep(count=2)
+            action._flash_led(count=2)
+            demo_map[demo_name]()
+            once_completed = True
+            return
+
         import threading
+
         stop_event = threading.Event()
 
         def listen_for_q():
@@ -479,12 +514,10 @@ if __name__=='__main__':
 
         threading.Thread(target=listen_for_q, daemon=True).start()
 
-        # Show demo list
         print("\nDemo order:")
         for idx, (name, _) in enumerate(demos, start=1):
             print(f"  {idx}. {name}")
 
-        # Loop demos continuously until 'q'
         while not stop_event.is_set():
             for idx, (name, demo_fn) in enumerate(demos, start=1):
                 if stop_event.is_set():
@@ -495,11 +528,21 @@ if __name__=='__main__':
                 demo_fn()
                 time.sleep(3)
 
-        # Completion cues
         action._beep(count=3)
         action._flash_led(count=3)
     finally:
-        # Always power down PWM at the end
+        if args.once and once_completed:
+            # Some Pi-side C-extension stacks occasionally segfault during interpreter teardown.
+            # In one-shot web-trigger mode, force a clean immediate exit after explicitly releasing PWM.
+            try:
+                action.servo.stop_all_pwm()
+                print("All servo PWM outputs disabled (stop_all_pwm)")
+            finally:
+                os._exit(0)
         action.servo.stop_all_pwm()
         print("All servo PWM outputs disabled (stop_all_pwm)")
+
+
+if __name__ == '__main__':
+    main()
         

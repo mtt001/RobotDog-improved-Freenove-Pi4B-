@@ -1,0 +1,1019 @@
+<!doctype html>
+<!--
+IMU Viewer Color Page
+Description:
+  Color model viewer with IMU telemetry, diagnostics, and model load status.
+Version:
+  2026.02.12-38
+Revision History:
+  2026-02-12 16:09 - Added explicit lower-left `Battery State` runtime line to show NORMAL/LOW status with threshold and duration details from Pi telemetry low-battery policy.
+  2026-02-12 15:45 - Added compact `Ports` runtime line in lower-left HUD and prepared diag display fields for LAN-reachable control host rendering instead of loopback-only (`127.0.0.1`) operator text.
+  2026-02-12 14:51 - Refined operator HUD density and control ergonomics: removed redundant lower-left rows (status/proxy-time/model state), merged live-clients header+summary, added video profile selector (`1280/960/640`), and tightened battery-scope labels/axis spacing for clearer oscilloscope-style readability.
+  2026-02-12 14:14 - Tuned live HUD for operator density: merged stream transport text into lower-left status row with LIVE/STALLED pill, moved IMU 3D overlay to bottom snap with in-canvas Pitch/Roll/Yaw readout, moved battery scope to lower-left corner, and added IMU-telemetry-lost visual state styling.
+  2026-02-12 12:50 - Added translucent live battery-trend overlay canvas (25-minute window, 5.5-8.5V rails, dashed 7.0V and low-battery lines) with inline low-battery warning badge support.
+  2026-02-12 11:38 - Added `Live Clients` widget in HUD to list healthy viewer heartbeats from Pi `/viewer/summary` (device/IP/FPS/age) for operator awareness.
+  2026-02-12 11:23 - Added live client-device badge (best-effort Safari class: Mac/iPhone/iPad) next to Live View title with light-yellow styling for operator visibility.
+  2026-02-12 11:16 - Moved stream/vision warning banner to bottom-center and added explicit alert-visibility class so minor warnings can display without forced center overlay or full-view dimming.
+  2026-02-12 09:51 - Added live stall/error visual guardrail: when stream stalls, live pane is greyed and explicit overlay message appears; added dedicated infer-model field in metrics and infer-label key hook for dynamic model source display.
+  2026-02-12 09:09 - Moved `Infer (ms)` higher in the `Vision/Stream Metrics` list (directly under stream FPS) so detector latency remains visible without scrolling.
+  2026-02-11 17:20 - Added live vision target overlay box/label and detector-health fields fed by Pi worker `/vision/state` (det-fps/infer-ms/health/model).
+  2026-02-11 14:57 - Converted `Yolo Vision` and `Tracking` from disabled placeholders to runtime Pi-state toggles (`/vision/state`) and added vision-mode/target-count metrics fields.
+  2026-02-11 14:40 - Added bottom-side Vision/Stream metrics panel for desktop analysis while keeping iPhone screen focused on live view + motion controls.
+  2026-02-11 14:40 - Added Pi-service vision performance config panel (`imgsz`, interval `N`, min stream FPS, auto-degrade) with runtime apply/reload actions.
+  2026-02-11 12:08 - Enabled Horizon toggle wiring, added Demo action key, and kept unsupported keys explicitly greyed with pending labels.
+  2026-02-11 11:46 - Wired action keys with explicit payloads for motion/beep/LED/balance; kept unsupported keys (Tracking/Face/Yolo/Horizon) greyed with pending labels.
+  2026-02-11 11:40 - Set 3D overlay canvas opacity to 50% for translucent model trial on live video.
+  2026-02-11 11:34 - Added iPhone-priority responsive layout so live video gets maximum viewport space; compacted/hid lower panes on small screens.
+  2026-02-11 11:16 - Moved `Web Viewer: live` and `Back` from IMU pane into the compact message pane row for cleaner IMU layout.
+  2026-02-11 11:12 - Simplified message pane into four compact rows, moved axis-definition text into IMU pane, and shifted top live title/telemetry lower to avoid overlap with stream-layer messages.
+  2026-02-11 10:53 - Removed redundant top IMU Attitude value block and kept only the IMU Roll/Pitch/Yaw matrix in the right pane.
+  2026-02-11 10:44 - Increased bottom status-pane height and merged IMU matrix details into IMU Attitude pane for consolidated monitoring.
+  2026-02-11 10:21 - Enforced 3D model overlay layering above all live-stream renderers (WebRTC iframe/video/MJPEG) so dog model always stays on top of video.
+  2026-02-11 10:18 - Rebuilt page layout to mirror mtDogMain-style shell (large left video, right control column, bottom status panes) and added placeholder-only trial controls.
+  2026-02-11 10:16 - Further compacted HUD width/table spacing for better video visibility while keeping IMU matrix readable.
+  2026-02-11 10:14 - Polished HUD layout (narrower panel/table), simplified axis note text, and renamed yaw button to `Reset Yaw to Right`.
+  2026-02-11 09:59 - Added experimental axis-mapping toggle (`Pi-native Roll/Pitch`) while keeping current swapped mapping as default.
+  2026-02-11 09:44 - Added explicit XYZ rotation-definition note in HUD message pane for yaw/pitch/roll interpretation.
+  2026-02-11 09:40 - Added IMU comparison matrix (Raw Pi / modified / 3D model degrees) in HUD for transparent mapping diagnostics.
+  2026-02-11 09:13 - Added right-panel `Reset Yaw to North` test button for quick yaw-zero alignment during prototype validation.
+  2026-02-10 19:10 - Added visible build badge and orientation tuning controls (invert/offset/reset) for color IMU model calibration.
+  2026-02-10 18:56 - Overlay 3D color model at live-view bottom-left, add compact IMU line, and stale visual alert styles.
+  2026-02-07 16:38 - Added WebRTC iframe layer for Live View (WebRTC-first fallback chain).
+  2026-02-07 16:33 - Live View title now shows current stream resolution (e.g., Live View 800x600).
+  2026-02-07 15:14 - Moved telemetry bar to top-left and added FPS text display.
+  2026-02-07 14:46 - Replaced live-view placeholder with H264/MJPEG runtime elements.
+  2026-02-07 13:39 - Added live telemetry polling for power/range.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>IMU Dog Viewer (Color)</title>
+    <style>
+      :root{
+        color-scheme: light;
+        --bg:#1f2329;
+        --panel:#05182f;
+        --panel-2:#071d38;
+        --line:rgba(120,180,255,.25);
+        --fg:#e7eef8;
+        --muted:#9fb0c5;
+        --accent:#35c7ff;
+        --ok:#00ff94;
+        --warn:#ff5e5e;
+      }
+      html,body{
+        margin:0;
+        height:100%;
+        background:var(--bg);
+        color:var(--fg);
+        font-family:"Avenir Next","Helvetica Neue",Arial,sans-serif;
+      }
+      #app-shell{
+        height:100%;
+        display:grid;
+        grid-template-columns:minmax(0, 1fr) 246px;
+        gap:10px;
+        padding:10px;
+        box-sizing:border-box;
+      }
+      #workspace{
+        min-width:0;
+        display:grid;
+        grid-template-rows:minmax(0, 1fr) 164px 58px;
+        gap:8px;
+      }
+      #live-view{
+        position:relative;
+        border:1px solid var(--line);
+        border-radius:10px;
+        background:rgba(0,0,0,.28);
+        overflow:hidden;
+        min-height:0;
+      }
+      #live-view .head{
+        position:absolute;
+        left:10px;
+        right:10px;
+        top:28px;
+        display:flex;
+        align-items:center;
+        justify-content:space-between;
+        gap:8px;
+        z-index:4;
+      }
+      #live-view .title{
+        font-size:14px;
+        font-weight:600;
+        letter-spacing:.2px;
+      }
+      #live-title-row{
+        display:flex;
+        align-items:center;
+        gap:8px;
+        min-width:0;
+      }
+      #live-client-device{
+        font-size:12px;
+        color:#ffe68a;
+        font-weight:600;
+        letter-spacing:.1px;
+        white-space:nowrap;
+        text-shadow:0 0 2px rgba(0,0,0,.45);
+        max-width:min(52vw, 560px);
+        overflow:hidden;
+        text-overflow:ellipsis;
+      }
+      #build-badge{
+        font-size:12px;
+        color:#8fd0ff;
+        background:rgba(5,18,34,.76);
+        border:1px solid rgba(143,208,255,.35);
+        border-radius:999px;
+        padding:3px 10px;
+        white-space:nowrap;
+      }
+      #telemetry-bar{
+        position:absolute;
+        left:10px;
+        top:58px;
+        z-index:4;
+        font-size:12px;
+        padding:4px 10px;
+        border-radius:8px;
+        background:rgba(0,0,0,.62);
+        border:1px solid rgba(255,255,255,.14);
+      }
+      #telemetryTop{
+        white-space:nowrap;
+        color:#9be0ff;
+      }
+      #live-media{
+        position:absolute;
+        inset:0;
+        display:flex;
+        align-items:center;
+        justify-content:center;
+      }
+      #liveVideo,#liveMjpeg,#liveWebrtc{
+        position:absolute;
+        inset:0;
+        width:100%;
+        height:100%;
+        object-fit:cover;
+        z-index:1;
+      }
+      #liveWebrtc{
+        border:0;
+      }
+      #liveStatus{
+        position:absolute;
+        left:10px;
+        bottom:10px;
+        z-index:4;
+        font-size:12px;
+        color:#d9e6f3;
+        background:rgba(0,0,0,.5);
+        border-radius:6px;
+        padding:3px 7px;
+        display:none;
+      }
+      #stream-alert{
+        position:absolute;
+        left:0;
+        right:0;
+        bottom:16px;
+        z-index:7;
+        display:none;
+        align-items:flex-end;
+        justify-content:center;
+        pointer-events:none;
+      }
+      #stream-alert .msg{
+        background:rgba(10,16,24,.78);
+        border:1px solid rgba(255,122,122,.75);
+        color:#ffd6d6;
+        border-radius:10px;
+        padding:10px 14px;
+        text-align:center;
+        font-size:14px;
+        font-weight:700;
+        line-height:1.25;
+        max-width:66%;
+      }
+      #stream-alert .sub{
+        display:block;
+        margin-top:4px;
+        color:#ffe6b8;
+        font-size:12px;
+        font-weight:600;
+      }
+      #live-view.video-stalled #live-media{
+        filter:grayscale(1) brightness(.62);
+      }
+      #live-view.video-stalled #stream-alert{
+        display:flex;
+      }
+      #live-view.alert-visible #stream-alert{
+        display:flex;
+      }
+      #vision-target-overlay{
+        position:absolute;
+        inset:0;
+        z-index:5;
+        pointer-events:none;
+      }
+      #vision-target-box{
+        position:absolute;
+        border:2px solid rgba(36, 255, 156, 0.9);
+        box-shadow:0 0 0 1px rgba(0,0,0,.35) inset;
+        border-radius:4px;
+        display:none;
+      }
+      #vision-target-label{
+        position:absolute;
+        top:-22px;
+        left:0;
+        font-size:12px;
+        color:#071216;
+        background:rgba(36,255,156,.92);
+        border-radius:4px;
+        padding:2px 6px;
+        white-space:nowrap;
+      }
+      #imu-overlay{
+        position:absolute;
+        right:10px;
+        bottom:0;
+        width:min(30vw, 340px);
+        height:min(36vh, 250px);
+        min-width:220px;
+        min-height:160px;
+        display:block;
+        z-index:6;
+        pointer-events:none;
+      }
+      #battery-trend-overlay{
+        position:absolute;
+        left:8px;
+        bottom:8px;
+        width:min(38vw, 430px);
+        height:min(20vh, 150px);
+        min-width:250px;
+        min-height:96px;
+        border:1px solid rgba(255,255,255,.18);
+        border-radius:8px;
+        background:rgba(6,14,24,.5);
+        z-index:6;
+        pointer-events:none;
+        overflow:hidden;
+      }
+      #battery-trend-canvas{
+        width:100%;
+        height:100%;
+        display:block;
+      }
+      #battery-low-warn{
+        position:absolute;
+        right:8px;
+        top:6px;
+        z-index:7;
+        font-size:11px;
+        font-weight:700;
+        color:#ffd4d4;
+        background:rgba(120,18,18,.82);
+        border:1px dashed rgba(255,118,118,.85);
+        border-radius:6px;
+        padding:2px 6px;
+        display:none;
+      }
+      #three-container{
+        position:absolute;
+        inset:0;
+        border-radius:10px;
+        overflow:hidden;
+        border:1px solid rgba(255,255,255,.12);
+        background:rgba(2,9,18,.78);
+      }
+      #three-container canvas{
+        display:block;
+        opacity:0.5;
+        transition:filter 180ms linear, opacity 180ms linear;
+      }
+      #model-alert{
+        position:absolute;
+        left:8px;
+        top:8px;
+        z-index:3;
+        display:none;
+        max-width:80%;
+        font-size:11px;
+        font-weight:700;
+        line-height:1.2;
+        color:#ffd5d5;
+        background:rgba(70,15,15,.84);
+        border:1px solid rgba(255,110,110,.65);
+        border-radius:6px;
+        padding:4px 7px;
+      }
+      #imuCompact{
+        position:absolute;
+        left:8px;
+        right:8px;
+        bottom:8px;
+        z-index:2;
+        font-size:12px;
+        line-height:1.15;
+        color:#d9e6f3;
+        background:rgba(0,0,0,.58);
+        border:1px solid rgba(255,255,255,.12);
+        border-radius:6px;
+        padding:4px 8px;
+        white-space:nowrap;
+        overflow:hidden;
+        text-overflow:ellipsis;
+      }
+      #imu-overlay.stale #imuCompact{
+        color:#ff6b6b;
+        border-color:rgba(255,107,107,.45);
+        background:rgba(30,8,8,.65);
+      }
+      #imu-overlay.stale #three-container canvas{
+        filter:grayscale(1) saturate(0) brightness(0.68);
+      }
+      .stream-pill{
+        display:inline-block;
+        margin-left:8px;
+        padding:1px 8px;
+        border-radius:999px;
+        font-size:11px;
+        font-weight:700;
+        border:1px solid rgba(255,255,255,.2);
+        color:#0b1f0f;
+        background:#1af06e;
+      }
+      .stream-pill.stalled{
+        color:#300707;
+        background:#ff6d6d;
+      }
+      #status-row{
+        display:grid;
+        grid-template-columns:minmax(0, 1fr) 320px 300px;
+        gap:8px;
+      }
+      #hud,#imu-status-box,#vision-metrics-box{
+        border:1px solid var(--line);
+        background:var(--panel);
+        border-radius:8px;
+        padding:8px 10px;
+        font-size:13px;
+        line-height:1.32;
+        overflow:auto;
+      }
+      #hud .line{
+        margin:2px 0;
+      }
+      #hud .pair{
+        display:grid;
+        grid-template-columns:1fr 1fr;
+        column-gap:14px;
+      }
+      #hud .pair .item{
+        white-space:nowrap;
+        overflow:hidden;
+        text-overflow:ellipsis;
+      }
+      #viewer-clients-box{
+        margin-top:6px;
+        border-top:1px solid rgba(255,255,255,.1);
+        padding-top:6px;
+      }
+      #viewer-clients-box .head{
+        color:#ffe08f;
+        font-weight:700;
+        font-size:11px;
+        margin-bottom:3px;
+        white-space:nowrap;
+        overflow:hidden;
+        text-overflow:ellipsis;
+      }
+      #viewer-clients-list{
+        display:grid;
+        gap:3px;
+        max-height:56px;
+        overflow:auto;
+      }
+      .viewer-client-row{
+        font-size:11px;
+        color:#dbe8f7;
+        line-height:1.2;
+        white-space:nowrap;
+        overflow:hidden;
+        text-overflow:ellipsis;
+      }
+      .label{color:var(--muted)}
+      #status{color:var(--ok);font-weight:700}
+      #imu-status-box .head{
+        color:#ff72dd;
+        font-weight:700;
+        margin-bottom:2px;
+      }
+      #imu-status-box .val{
+        font-weight:700;
+      }
+      #imu-status-box #imu-matrix{
+        margin-top:8px;
+      }
+      #footer-row{
+        border:1px solid var(--line);
+        background:var(--panel-2);
+        border-radius:8px;
+        display:flex;
+        align-items:center;
+        gap:10px;
+        padding:8px 10px;
+        font-size:12px;
+      }
+      #footer-row .pill{
+        border:1px solid rgba(255,255,255,.2);
+        background:rgba(0,0,0,.36);
+        color:#d4e8ff;
+        border-radius:6px;
+        padding:4px 8px;
+      }
+      #footer-row .strong{
+        color:var(--ok);
+        font-weight:700;
+      }
+      #imu-matrix{
+        margin-top:6px;
+        padding-top:5px;
+        border-top:1px solid rgba(255,255,255,.12);
+        font-size:11px;
+      }
+      #imu-matrix .head{
+        color:#9fb1c4;
+        margin-bottom:3px;
+      }
+      #imu-matrix table{
+        width:100%;
+        border-collapse:collapse;
+      }
+      #imu-matrix th,#imu-matrix td{
+        padding:1px 3px;
+        text-align:right;
+      }
+      #imu-matrix th:first-child,#imu-matrix td:first-child{
+        text-align:left;
+        white-space:nowrap;
+      }
+      #imu-matrix th:first-child{width:98px}
+      #imu-matrix tbody tr+tr td{
+        border-top:1px solid rgba(255,255,255,.08);
+      }
+      #imu-status-box.telemetry-lost .head{
+        color:#ff6b6b;
+      }
+      #imu-status-box.telemetry-lost #imu-matrix td{
+        color:#98a2ad;
+      }
+      #vision-metrics-box .head{
+        color:#ffcf6f;
+        font-weight:700;
+        margin-bottom:4px;
+      }
+      #vision-metrics-box .line{
+        display:flex;
+        justify-content:space-between;
+        align-items:center;
+        gap:8px;
+        margin:2px 0;
+        font-size:12px;
+      }
+      #vision-metrics-box .k{
+        color:#9fb1c4;
+      }
+      #vision-metrics-box .v{
+        color:#e6f2ff;
+        font-weight:600;
+        text-align:right;
+      }
+      #action-pane{
+        border:1px solid var(--line);
+        border-radius:8px;
+        background:var(--panel);
+        padding:10px 8px;
+        color:#cfd6df;
+        overflow:auto;
+      }
+      #action-pane .title{
+        color:#fff;
+        font-size:33px;
+        font-weight:700;
+        margin-bottom:8px;
+      }
+      #action-pane .subtitle{
+        color:#9eb1c9;
+        font-size:12px;
+        margin-bottom:8px;
+      }
+      #action-pane .grid{
+        display:grid;
+        grid-template-columns:repeat(3, 1fr);
+        gap:8px;
+      }
+      #action-pane .row{
+        display:flex;
+        gap:6px;
+        margin-top:8px;
+      }
+      .action-btn{
+        border:none;
+        border-radius:12px;
+        padding:8px 7px;
+        font-size:13px;
+        font-weight:600;
+        background:#13375e;
+        color:#e6f2ff;
+        cursor:pointer;
+      }
+      .action-btn:hover{filter:brightness(1.12)}
+      .stop{background:#ff3f3a}
+      .green{background:#06c755}
+      .blue{background:#1884ff}
+      .purple{background:#7f4dd2}
+      .amber{background:#f8b80a;color:#1e1e1e}
+      .teal{background:#12b8b2}
+      .placeholder{
+        opacity:.95;
+      }
+      #orientation-tools{
+        margin-top:10px;
+        padding-top:8px;
+        border-top:1px solid rgba(255,255,255,.12);
+      }
+      #orientation-tools .subtitle{
+        color:#ffffff;
+        font-size:12px;
+        margin-bottom:6px;
+        font-weight:600;
+      }
+      #orientation-tools .toggles{
+        display:grid;
+        grid-template-columns:repeat(3, 1fr);
+        gap:6px;
+      }
+      #orientation-tools label{
+        font-size:11px;
+        display:flex;
+        gap:4px;
+        align-items:center;
+      }
+      #orientation-tools .offsets{
+        margin-top:6px;
+        display:grid;
+        grid-template-columns:repeat(3, 1fr);
+        gap:6px;
+      }
+      #orientation-tools input[type="number"]{
+        width:100%;
+        box-sizing:border-box;
+        border-radius:6px;
+        border:1px solid rgba(255,255,255,.16);
+        background:rgba(0,0,0,.35);
+        color:#e6f2ff;
+        padding:4px 6px;
+        font-size:11px;
+      }
+      #orientation-tools .hint{
+        margin-top:6px;
+        font-size:11px;
+        color:#9fb1c4;
+      }
+      #orientation-tools .reset{
+        margin-top:6px;
+        width:100%;
+      }
+      .placeholder-box{
+        margin-top:8px;
+        border:1px solid rgba(255,255,255,.12);
+        border-radius:8px;
+        padding:7px;
+      }
+      .cfg-box{
+        margin-top:8px;
+        border:1px solid rgba(255,255,255,.12);
+        border-radius:8px;
+        padding:7px;
+        background:rgba(0,0,0,.2);
+      }
+      .cfg-box .head{
+        font-size:12px;
+        color:#9eb1c9;
+        margin-bottom:6px;
+      }
+      .cfg-grid{
+        display:grid;
+        grid-template-columns:1fr 1fr;
+        gap:6px;
+      }
+      .cfg-grid label{
+        font-size:11px;
+        color:#b5c7dc;
+        display:flex;
+        flex-direction:column;
+        gap:3px;
+      }
+      .cfg-grid input,
+      .cfg-grid select{
+        width:100%;
+        box-sizing:border-box;
+        border-radius:6px;
+        border:1px solid rgba(255,255,255,.16);
+        background:rgba(0,0,0,.35);
+        color:#e6f2ff;
+        padding:4px 6px;
+        font-size:11px;
+      }
+      .cfg-actions{
+        margin-top:6px;
+        display:flex;
+        gap:6px;
+      }
+      .cfg-status{
+        margin-top:6px;
+        font-size:11px;
+        color:#9fb1c4;
+        min-height:15px;
+      }
+      .placeholder-box .head{
+        font-size:12px;
+        color:#9eb1c9;
+        margin-bottom:6px;
+      }
+      .slider-row{
+        display:flex;
+        align-items:center;
+        gap:6px;
+        font-size:11px;
+        margin-top:4px;
+      }
+      .slider-row input[type="range"]{
+        flex:1;
+      }
+      .muted{
+        color:#9eb1c9;
+      }
+      @media (max-width: 1200px){
+        #app-shell{
+          grid-template-columns:1fr;
+          grid-template-rows:minmax(0, 1fr) auto;
+        }
+        #action-pane{
+          max-height:40vh;
+        }
+      }
+      @media (max-width: 900px){
+        #workspace{
+          grid-template-rows:minmax(0, 1fr) auto auto;
+        }
+        #status-row{
+          grid-template-columns:1fr;
+        }
+        #imu-overlay{
+          width:min(50vw, 280px);
+          min-width:170px;
+          height:min(30vh, 200px);
+          min-height:120px;
+          right:8px;
+          bottom:8px;
+        }
+      }
+      @media (max-width: 768px){
+        html, body{
+          height:100dvh;
+        }
+        #app-shell{
+          height:100dvh;
+          padding:6px;
+          gap:6px;
+          grid-template-columns:1fr;
+          grid-template-rows:minmax(0, 1fr) auto;
+        }
+        #workspace{
+          grid-template-rows:minmax(68dvh, 1fr);
+          gap:0;
+        }
+        #live-view{
+          min-height:68dvh;
+        }
+        #live-view .head{
+          top:8px;
+          left:8px;
+          right:8px;
+        }
+        #telemetry-bar{
+          top:34px;
+          left:8px;
+          font-size:11px;
+          padding:3px 8px;
+        }
+        #status-row,
+        #footer-row{
+          display:none;
+        }
+        #imu-overlay{
+          width:min(52vw, 220px);
+          height:min(27dvh, 170px);
+          min-width:150px;
+          min-height:110px;
+          right:8px;
+          bottom:8px;
+        }
+        #imuCompact{
+          font-size:11px;
+          padding:3px 6px;
+        }
+        #action-pane{
+          max-height:28dvh;
+          padding:8px 6px;
+        }
+        #action-pane .title{
+          font-size:24px;
+          margin-bottom:6px;
+        }
+        #action-pane .subtitle{
+          font-size:11px;
+          margin-bottom:6px;
+        }
+        .action-btn{
+          font-size:12px;
+          padding:6px 6px;
+        }
+        .placeholder-box,
+        #orientation-tools,
+        #vision-config-tools{
+          display:none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app-shell">
+      <div id="workspace">
+        <div id="live-view">
+          <div class="head">
+            <div id="live-title-row">
+              <div class="title" id="liveTitle">Live View</div>
+              <div id="live-client-device">Client: --</div>
+            </div>
+            <div id="build-badge">Build: --</div>
+          </div>
+          <div id="telemetry-bar">
+            <span id="telemetryTop">Power --  Range --  0.0fps</span>
+          </div>
+          <div id="live-media">
+            <iframe id="liveWebrtc" style="display:none" title="WebRTC Live View"></iframe>
+            <video id="liveVideo" autoplay muted playsinline style="display:none"></video>
+            <img id="liveMjpeg" alt="Live MJPEG stream" style="display:none" />
+            <div id="vision-target-overlay">
+              <div id="vision-target-box">
+                <div id="vision-target-label">target</div>
+              </div>
+            </div>
+            <div id="imu-overlay">
+              <div id="three-container">
+                <div id="model-alert">3D model unavailable</div>
+                <div id="imuCompact">Pitch --  Roll --  Yaw --</div>
+              </div>
+            </div>
+            <div id="battery-trend-overlay">
+              <canvas id="battery-trend-canvas"></canvas>
+              <div id="battery-low-warn">Low Battery</div>
+            </div>
+          </div>
+          <div id="stream-alert">
+            <div class="msg" id="stream-alert-text">
+              Video stream stalled
+              <span class="sub" id="stream-alert-sub">Waiting for recovery...</span>
+            </div>
+          </div>
+          <div id="liveStatus">starting...</div>
+        </div>
+
+        <div id="status-row">
+          <div id="hud">
+            <div class="line pair">
+              <div class="item"><span class="label">Stream:</span> <span id="stream-detail">WebRTC (RTP/UDP via SFU)</span><span id="stream-state-pill" class="stream-pill">LIVE</span></div>
+              <div class="item"><span class="label">Diag:</span> <span id="diag">--</span></div>
+            </div>
+            <div class="line pair">
+              <div class="item"><span class="label">Error:</span> <span id="err">--</span></div>
+            </div>
+            <div class="line pair">
+              <div class="item"><span class="label">Battery State:</span> <span id="battery-state">--</span></div>
+            </div>
+            <div class="line pair">
+              <div class="item"><span class="label">Ports:</span> <span id="ports-map">--</span></div>
+            </div>
+            <div class="line pair">
+              <div class="item"><a href="/" style="color:var(--accent); text-decoration:none;">Back</a></div>
+            </div>
+            <div id="viewer-clients-box">
+              <div class="head" id="viewer-clients-head">Live Clients: --</div>
+              <div id="viewer-clients-list"></div>
+            </div>
+            <div style="display:none"><span id="status">starting</span></div>
+            <div style="display:none"><span id="version">--</span></div>
+            <div style="display:none"><span id="versiontime">--</span></div>
+            <div style="display:none"><span id="modelstatus">loading</span></div>
+            <div style="display:none"><span id="modelerr">--</span></div>
+            <div style="display:none"><span id="power">--</span></div>
+            <div style="display:none"><span id="range">--</span></div>
+            <div style="display:none"><span id="lastok">--</span></div>
+          </div>
+          <div id="imu-status-box">
+            <div class="head" id="imu-status-head">IMU Attitude</div>
+            <div style="display:none"><span class="label">Pitch:</span> <span class="val" id="pitch">--</span></div>
+            <div style="display:none"><span class="label">Roll:</span> <span class="val" id="roll">--</span></div>
+            <div style="display:none"><span class="label">Yaw:</span> <span class="val" id="yaw">--</span></div>
+            <div id="imu-matrix">
+              <div class="head">Yaw: rotate Z, Pitch: rotate X, Roll: rotate Y</div>
+              <table>
+                <thead>
+                  <tr><th>Source</th><th>Roll</th><th>Pitch</th><th>Yaw</th></tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td>IMU Raw Pi</td>
+                    <td id="raw-roll">--</td>
+                    <td id="raw-pitch">--</td>
+                    <td id="raw-yaw">--</td>
+                  </tr>
+                  <tr>
+                    <td>modified</td>
+                    <td id="mod-roll">--</td>
+                    <td id="mod-pitch">--</td>
+                    <td id="mod-yaw">--</td>
+                  </tr>
+                  <tr>
+                    <td>3D model</td>
+                    <td id="model-roll">--</td>
+                    <td id="model-pitch">--</td>
+                    <td id="model-yaw">--</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <div id="vision-metrics-box">
+            <div class="head">Vision/Stream Metrics</div>
+            <div class="line"><span class="k">Stream FPS</span><span class="v" id="vm-stream-fps">--</span></div>
+            <div class="line"><span class="k" id="vm-infer-key">Infer (ms)</span><span class="v" id="vm-infer-ms">--</span></div>
+            <div class="line"><span class="k">Infer Model</span><span class="v" id="vm-infer-model">--</span></div>
+            <div class="line"><span class="k">Min FPS Target</span><span class="v" id="vm-min-fps">--</span></div>
+            <div class="line"><span class="k">P0 Status</span><span class="v" id="vm-kpi-status">--</span></div>
+            <div class="line"><span class="k">YOLO imgsz</span><span class="v" id="vm-imgsz">--</span></div>
+            <div class="line"><span class="k">Interval N</span><span class="v" id="vm-interval-n">--</span></div>
+            <div class="line"><span class="k">Auto Degrade</span><span class="v" id="vm-auto-degrade">--</span></div>
+            <div class="line"><span class="k">Throttle Action</span><span class="v" id="vm-throttle-action">--</span></div>
+            <div class="line"><span class="k">Throttle Count</span><span class="v" id="vm-throttle-count">--</span></div>
+            <div class="line"><span class="k">Preferred Stream</span><span class="v" id="vm-stream-pref">--</span></div>
+            <div class="line"><span class="k">Server MJPEG FPS</span><span class="v" id="vm-mjpeg-fps">--</span></div>
+            <div class="line"><span class="k">Client Metric Age</span><span class="v" id="vm-client-age">--</span></div>
+            <div class="line"><span class="k">Vision Mode</span><span class="v" id="vm-vision-mode">--</span></div>
+            <div class="line"><span class="k">Target Count</span><span class="v" id="vm-target-count">--</span></div>
+            <div class="line"><span class="k">Detector FPS</span><span class="v" id="vm-det-fps">--</span></div>
+            <div class="line"><span class="k">Vision Health</span><span class="v" id="vm-vision-health">--</span></div>
+            <div class="line"><span class="k">Vision Error</span><span class="v" id="vm-vision-error">--</span></div>
+          </div>
+        </div>
+
+        <div id="footer-row">
+          <button class="pill">Switch to Client Mac Video</button>
+          <span class="strong">IP/Path: robotdog</span>
+          <span class="pill">Ctrl: 5001</span>
+          <span class="pill">Camera source placeholder</span>
+        </div>
+      </div>
+
+      <div id="action-pane">
+        <div class="title">Dog Controls</div>
+        <div class="subtitle">Motion (W/E/R, S/D/F, C)</div>
+        <div class="grid">
+          <button class="action-btn blue" data-cmd="CMD_TURN_LEFT#30">W</button>
+          <button class="action-btn green" data-cmd="CMD_MOVE_FORWARD#35">E</button>
+          <button class="action-btn blue" data-cmd="CMD_TURN_RIGHT#30">R</button>
+          <button class="action-btn teal" data-cmd="CMD_MOVE_LEFT#35">S</button>
+          <button class="action-btn" data-cmd="CMD_RELAX">D</button>
+          <button class="action-btn teal" data-cmd="CMD_MOVE_RIGHT#35">F</button>
+          <button class="action-btn placeholder" disabled title="Pending command mapping">X</button>
+          <button class="action-btn green" data-cmd="CMD_MOVE_BACKWARD#35">C</button>
+          <button class="action-btn placeholder" disabled title="Pending command mapping">V</button>
+        </div>
+        <div class="row">
+          <button class="action-btn stop" data-cmd="CMD_MOVE_STOP" style="width:100%">Space STOP</button>
+        </div>
+
+        <div class="subtitle" style="margin-top:10px;">Actions</div>
+        <div class="row">
+          <button class="action-btn amber" data-action="beep">Beep</button>
+          <button class="action-btn" data-action="led">LED</button>
+          <button class="action-btn" data-cmd="CMD_CALIBRATION">Cal</button>
+        </div>
+        <div class="row">
+          <button class="action-btn" id="trigger-demo" data-state="off">Demo</button>
+        </div>
+        <div class="row">
+          <button class="action-btn" id="toggle-tracking" data-state="off">Tracking OFF</button>
+          <button class="action-btn purple placeholder" disabled title="Pending: face mode contract">Face</button>
+        </div>
+        <div class="row">
+          <button class="action-btn" id="toggle-yolo" data-state="off" style="width:100%">Yolo Vision OFF</button>
+        </div>
+        <div class="row">
+          <button class="action-btn" id="toggle-balance" data-state="off">Balance OFF</button>
+          <button class="action-btn" id="toggle-horizon" data-state="off">Horizon OFF</button>
+        </div>
+        <div class="row">
+          <button class="action-btn" id="reset-yaw-right" type="button" style="width:100%">Reset Yaw to Right</button>
+        </div>
+
+        <div class="placeholder-box">
+          <div class="head">Attitude Angle (placeholder)</div>
+          <div class="slider-row"><span>Roll</span><input type="range" min="-20" max="20" value="0" disabled /></div>
+          <div class="slider-row"><span>Pitch</span><input type="range" min="-20" max="20" value="0" disabled /></div>
+          <div class="slider-row"><span>Yaw</span><input type="range" min="-20" max="20" value="0" disabled /></div>
+          <div class="slider-row"><span>Head</span><input type="range" min="-20" max="20" value="0" disabled /></div>
+        </div>
+
+        <div class="row">
+          <label style="font-size:12px;display:flex;align-items:center;gap:6px;">
+            <input id="use-pi-native-axis" type="checkbox" />
+            Experimental: Pi-native Roll/Pitch
+          </label>
+        </div>
+
+        <div id="orientation-tools">
+          <div class="subtitle">IMU Tuning</div>
+          <div class="toggles">
+            <label><input type="checkbox" id="inv-roll" />Inv Roll</label>
+            <label><input type="checkbox" id="inv-pitch" />Inv Pitch</label>
+            <label><input type="checkbox" id="inv-yaw" />Inv Yaw</label>
+          </div>
+          <div class="offsets">
+            <input type="number" id="off-roll" min="-180" max="180" step="0.1" placeholder="Roll off" />
+            <input type="number" id="off-pitch" min="-180" max="180" step="0.1" placeholder="Pitch off" />
+            <input type="number" id="off-yaw" min="-180" max="180" step="0.1" placeholder="Yaw off" />
+          </div>
+          <button class="action-btn reset" id="ori-reset" type="button">Reset Tuning</button>
+          <div class="hint">Stored locally in browser.</div>
+        </div>
+
+        <div id="vision-config-tools" class="cfg-box">
+          <div class="head">Vision Perf (Pi Service)</div>
+          <div class="cfg-grid">
+            <label>
+              Video Resolution
+              <select id="video-profile">
+                <option value="1280x720">Full/Max (1280)</option>
+                <option value="960x540" selected>Default (960)</option>
+                <option value="640x360">Low (640)</option>
+              </select>
+            </label>
+            <label>
+              YOLO `imgsz`
+              <select id="vision-imgsz">
+                <option value="256">256</option>
+                <option value="320">320</option>
+                <option value="416">416</option>
+                <option value="512">512</option>
+              </select>
+            </label>
+            <label>
+              Detect Interval N
+              <input id="vision-interval-n" type="number" min="1" max="30" step="1" value="5" />
+            </label>
+            <label>
+              Min Stream FPS
+              <input id="vision-min-fps" type="number" min="5" max="60" step="0.5" value="20" />
+            </label>
+            <label>
+              Auto Degrade
+              <select id="vision-auto-degrade">
+                <option value="true">Enabled</option>
+                <option value="false">Disabled</option>
+              </select>
+            </label>
+          </div>
+          <div class="cfg-actions">
+            <button id="vision-config-apply" class="action-btn" type="button">Apply</button>
+            <button id="vision-config-reload" class="action-btn" type="button">Reload</button>
+          </div>
+          <div id="vision-config-status" class="cfg-status">Loading...</div>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/app_color.js"></script>
+  </body>
+</html>

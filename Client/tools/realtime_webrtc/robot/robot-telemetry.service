@@ -1,0 +1,19 @@
+# Version: 2026.02.09-2
+# Revision History:
+#   2026-02-09 - Add startup dependency on robot-publisher for clearer service ordering in Phase-5.
+#   2026-02-09 - Initial telemetry API service for Phase-2 read-only overlay.
+[Unit]
+Description=RobotDog Telemetry API
+After=network-online.target smartdog.service robot-sfu.service robot-publisher.service
+Wants=network-online.target robot-publisher.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Server
+ExecStart=/usr/bin/python3 /home/pi/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Server/telemetry_api_server.py --listen 0.0.0.0 --port 8090 --control-host 127.0.0.1 --control-port 5001 --stream-path robotdog --poll-interval 0.8
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

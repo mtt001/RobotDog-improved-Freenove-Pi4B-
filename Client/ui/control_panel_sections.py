@@ -10,6 +10,8 @@
      Control panel UI section builder extracted from mtDogMain.py (CameraWindow).
      Builds Actions, Object Detection Test, and System control sections.
 
+ v1.02  (2026-02-09 21:31)    : Add IMU web viewer launch button in System section
+     • Add `IMU Web` action button (mtDogMain handler wiring) beside Play/Quit.
  v1.01  (2026-02-01)          : Simplify test UI + improve button sizing
      • Remove CV Ball + GPT Vision buttons (YOLO only).
      • Increase button height/padding to avoid jammed multi-line labels.
@@ -99,9 +101,11 @@ class ControlPanelSectionsBuilder:
         sys_layout.setSpacing(8)
 
         host.btn_play = self._make_pill_button("Play", "P: Play pose sequence", "#777777")
+        host.btn_imu_viewer = self._make_pill_button("IMU Web", "Open Pi-hosted WebRTC/IMU viewer", "#1f8df5")
         host.btn_quit = self._make_pill_button("Quit", "Q: Quit program", "#cc3333")
 
         sys_layout.addWidget(host.btn_play)
+        sys_layout.addWidget(host.btn_imu_viewer)
         sys_layout.addWidget(host.btn_quit)
         sys_frame.setLayout(sys_layout)
         panel_layout.addWidget(sys_frame)

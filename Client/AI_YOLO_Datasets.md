@@ -1,7 +1,15 @@
 # AI_YOLO_Datasets.md
+
+## Version
+v1.2.0 (2026-02-11 17:36 local time)
+
+## Revision History
+- 2026-02-11 17:36 v1.2.0  Added detailed operational sections: split policy, training/evaluation commands, model artifact registry, deployment mapping to mtDogMain runtime, and dataset quality gates.
+- 2026-01-29 v1.0.0  Initial dataset rules and YOLO/CV hybrid collection guidance.
+
 Author: MT  
 Project: Freenove Robot Dog – YOLO + CV Hybrid Vision  
-Last Updated: 2026-01-29
+Last Updated: 2026-02-11 17:36
 
 ---
 
@@ -591,3 +599,132 @@ Example command (MPS):
 Expected behavior:
 - MPS should show “MPS (Apple M5)” at startup.
 - If it shows CPU, you are not using GPU acceleration.
+
+---
+
+## 16. Train/Val Split Policy (Operational)
+
+Use deterministic split to keep comparisons fair between versions.
+
+### 16.1 Required layout for training-ready dataset
+
+```
+AI_datasets/yolo_ball_vXX/
+  images/
+    train/
+    val/
+  labels/
+    train/
+    val/
+  meta/
+  dataset.yaml
+  README.md
+```
+
+Rules:
+- `images/train/*.jpg` must have matching `labels/train/*.txt`.
+- `images/val/*.jpg` must have matching `labels/val/*.txt`.
+- Keep `meta/` as a flat map by filename unless there is a specific reason to split.
+
+### 16.2 Recommended split ratio
+
+- train: 80%
+- val: 20%
+
+If dataset is small (<300 samples), use at least 50 validation images.
+
+---
+
+## 17. Training, Evaluation, and Export Commands
+
+### 17.1 Baseline training command (Ultralytics)
+
+```bash
+~/.venvs/freenove-client/bin/python -m ultralytics yolo train \
+  model=Client/yolov8n.pt \
+  data=Client/AI_datasets/yolo_ball_v01/dataset.yaml \
+  imgsz=640 epochs=100 batch=16
+```
+
+### 17.2 macOS Apple Silicon (MPS) command
+
+```bash
+yolo train model=Client/yolov8n.pt \
+  data=Client/AI_datasets/yolo_ball_v01/dataset.yaml \
+  imgsz=512 epochs=100 batch=32 device=mps cache=True workers=0
+```
+
+### 17.3 Validation command (explicit)
+
+```bash
+yolo val model=Client/runs/detect/train5/weights/best.pt \
+  data=Client/AI_datasets/yolo_ball_v01/dataset.yaml
+```
+
+### 17.4 Optional export command
+
+```bash
+yolo export model=Client/runs/detect/train5/weights/best.pt format=onnx
+```
+
+---
+
+## 18. Model Artifact Registry (`*.pt`)
+
+Current known model artifacts in this repository:
+
+- `Client/yolov8n.pt`
+  - baseline COCO model
+  - used as the reference/general detector
+- `Client/runs/detect/train5/weights/best.pt`
+  - custom mt_ball trained model
+  - current preferred custom detector weight
+- `Client/runs/detect/train5/weights/last.pt`
+  - most recent checkpoint from same run
+
+Selection rule:
+- deploy `best.pt` for custom ball detection
+- keep `yolov8n.pt` for general COCO classes and fallback comparison
+
+---
+
+## 19. Runtime Deployment Mapping (Current `mtDogMain.py`)
+
+The current runtime uses dual-model inference in `Client/vision/yolo_runtime.py`.
+
+- `host.yolo_model_best_path` -> `Client/runs/detect/train5/weights/best.pt`
+- `host.yolo_model_orig_path` -> `Client/yolov8n.pt`
+- `host.yolo_detector_mt` runs custom ball (`class_id=0` in custom model)
+- `host.yolo_detector_coco` runs COCO classes (sports ball/dog/person)
+
+Compare behavior:
+- left view: `best.pt` detections
+- right view: `yolov8n.pt` sports-ball detections
+
+Target priority rule:
+- ball first (`mt_ball` or `sports ball`)
+- dog second
+- person third
+
+---
+
+## 20. Dataset Quality Gates Before Training
+
+Run these checks before any training job:
+
+1. Label syntax check:
+   - each label line has exactly 5 numeric columns
+2. Pairing check:
+   - every image has label
+   - every label has image
+3. Bounding-box validity:
+   - `0 < w <= 1`, `0 < h <= 1`
+   - `0 <= cx, cy <= 1`
+4. Duplicate/near-duplicate check:
+   - avoid over-counting static frames from same pose
+5. Class coverage:
+   - for ball-only dataset, ensure `class_id=0` only
+6. Difficulty balance:
+   - target distribution near 30/40/30 (Easy/Medium/Hard)
+
+If any gate fails, fix dataset first, then retrain.

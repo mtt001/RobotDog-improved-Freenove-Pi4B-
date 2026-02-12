@@ -1,0 +1,1139 @@
+<!doctype html>
+<!--
+File: webrtc_view.html
+Version: v1.13 (2026-02-10 07:33)
+Revision History:
+- 2026-02-10 07:33 v1.13  Wire mobile `Balance` toggle to backend API (`balance_on`/`balance_off`) with ARM/session safety.
+- 2026-02-10 07:27 v1.12  Wire low-risk actions (Beep/LED/Cal) to `/api/command` under existing ARM/session gate.
+- 2026-02-10 07:25 v1.11  Expand IMU 3D block with tunable smoothing/axis scaling and stale-freeze status badge.
+- 2026-02-10 07:11 v1.10  Add simple Safari-safe 3D IMU model (CSS cube) driven by live roll/pitch/yaw telemetry.
+- 2026-02-09 21:31 v1.9  Add low-priority mobile UI parity scaffold (mtDogMain-style motion keys + placeholder controls/sliders).
+- 2026-02-09 18:55 v1.8  Add Phase-5 diagnostics panel (`/api/diagnostics`) for service/port/session quick observability.
+- 2026-02-09 18:43 v1.7  Add Phase-4 multi-client UX: control lock indicator, request/release handoff actions, and explicit busy-owner messaging.
+- 2026-02-09 18:21 v1.6  Add Phase-3 mobile command MVP UI (arm/disarm, hold-to-move, stop/relax) using /api/session and /api/command.
+- 2026-02-09 18:14 v1.5  Add visible on-page build badge with version/timestamp for quick runtime confirmation.
+- 2026-02-09 17:01 v1.4  Move runtime web asset location from Client monitor path to Server/web for Pi-hosted ownership clarity.
+- 2026-02-09 16:09 v1.3  Add stale-data and backend-down indicators for telemetry overlay.
+- 2026-02-09 16:04 v1.2  Add Phase-2 read-only telemetry overlay using /api/telemetry polling.
+- 2026-02-09 11:10 v1.1  Clarify player URL vs WHEP API endpoint in Safari viewer UI.
+- 2026-02-08 15:26 v1.0  Initial iPhone Safari-first WHEP WebRTC viewer.
+-->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Robot Dog Live View (WebRTC/WHEP)</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #0c1018;
+      --panel: #151e2d;
+      --line: #2a3852;
+      --text: #e6edf8;
+      --accent: #38bdf8;
+      --ok: #22c55e;
+      --warn: #f59e0b;
+      --err: #ef4444;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: radial-gradient(circle at 15% 0%, #1a2740 0%, var(--bg) 45%);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      display: grid;
+      place-items: center;
+      padding: 16px;
+    }
+    .card {
+      width: min(980px, 100%);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: linear-gradient(180deg, #172238, var(--panel));
+      padding: 14px;
+      box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+    }
+    .header {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      flex-wrap: wrap;
+    }
+    h1 {
+      margin: 0;
+      font-size: 1.05rem;
+      letter-spacing: 0.01em;
+      font-weight: 650;
+    }
+    .badge {
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 4px 10px;
+      font-size: 0.78rem;
+      color: #c8d6ef;
+      background: rgba(4, 8, 16, 0.4);
+    }
+    .badge-group {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      align-items: flex-end;
+    }
+    .badge.build {
+      color: #93c5fd;
+      border-color: rgba(59, 130, 246, 0.4);
+    }
+    .status {
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 8px 10px;
+      font-size: 0.9rem;
+      margin-bottom: 10px;
+      background: rgba(8, 12, 22, 0.55);
+    }
+    .status.ok { border-color: rgba(34, 197, 94, 0.45); color: var(--ok); }
+    .status.warn { border-color: rgba(245, 158, 11, 0.45); color: var(--warn); }
+    .status.err { border-color: rgba(239, 68, 68, 0.45); color: var(--err); }
+    .video-wrap {
+      width: 100%;
+      aspect-ratio: 16 / 9;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid var(--line);
+      background: #000;
+    }
+    video {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      background: #000;
+    }
+    .telemetry {
+      margin-top: 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(8, 12, 22, 0.55);
+      padding: 10px;
+    }
+    .telemetry h2 {
+      margin: 0 0 8px;
+      font-size: 0.95rem;
+      font-weight: 650;
+      color: #d6e5ff;
+    }
+    .telemetry-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px;
+      font-size: 0.85rem;
+    }
+    .telemetry-item {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 6px 8px;
+      background: rgba(3, 7, 14, 0.45);
+    }
+    .telemetry-item .k {
+      color: #9fb2d5;
+      font-size: 0.78rem;
+    }
+    .telemetry-item .v {
+      color: #e8f1ff;
+      font-weight: 600;
+      margin-top: 2px;
+    }
+    .telemetry-note {
+      margin-top: 8px;
+      font-size: 0.78rem;
+      color: #9fb2d5;
+      word-break: break-all;
+    }
+    .imu3d-wrap {
+      margin-top: 8px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(3, 7, 14, 0.45);
+      padding: 8px;
+      display: grid;
+      grid-template-columns: 140px 1fr;
+      gap: 10px;
+      align-items: center;
+    }
+    .imu3d-viewport {
+      width: 120px;
+      height: 120px;
+      margin: 0 auto;
+      perspective: 480px;
+      perspective-origin: 50% 50%;
+    }
+    .imu3d-cube {
+      width: 58px;
+      height: 58px;
+      position: relative;
+      margin: 30px auto 0;
+      transform-style: preserve-3d;
+      transition: transform 100ms linear;
+      transform: rotateX(0deg) rotateY(0deg) rotateZ(0deg);
+    }
+    .imu3d-face {
+      position: absolute;
+      width: 58px;
+      height: 58px;
+      border: 1px solid rgba(148, 163, 184, 0.55);
+      border-radius: 6px;
+      background: rgba(59, 130, 246, 0.35);
+      color: #dbeafe;
+      font-size: 0.7rem;
+      display: grid;
+      place-items: center;
+      backface-visibility: hidden;
+    }
+    .imu3d-face.front  { transform: translateZ(29px); background: rgba(59, 130, 246, 0.45); }
+    .imu3d-face.back   { transform: rotateY(180deg) translateZ(29px); }
+    .imu3d-face.right  { transform: rotateY(90deg) translateZ(29px); background: rgba(16, 185, 129, 0.40); }
+    .imu3d-face.left   { transform: rotateY(-90deg) translateZ(29px); }
+    .imu3d-face.top    { transform: rotateX(90deg) translateZ(29px); background: rgba(245, 158, 11, 0.40); }
+    .imu3d-face.bottom { transform: rotateX(-90deg) translateZ(29px); }
+    .imu3d-meta {
+      font-size: 0.8rem;
+      color: #9fb2d5;
+    }
+    .imu3d-meta .v {
+      color: #e8f1ff;
+      font-weight: 600;
+    }
+    .imu3d-state {
+      margin-top: 6px;
+      display: inline-block;
+      border: 1px solid rgba(34, 197, 94, 0.45);
+      color: #86efac;
+      border-radius: 999px;
+      padding: 2px 8px;
+      font-size: 0.74rem;
+    }
+    .imu3d-state.stale {
+      border-color: rgba(245, 158, 11, 0.45);
+      color: #fcd34d;
+    }
+    .imu3d-state.offline {
+      border-color: rgba(239, 68, 68, 0.45);
+      color: #fca5a5;
+    }
+    .imu3d-tune {
+      margin-top: 8px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 6px;
+      font-size: 0.76rem;
+      color: #9fb2d5;
+    }
+    .imu3d-tune label {
+      display: grid;
+      gap: 3px;
+    }
+    .imu3d-tune input,
+    .imu3d-tune select {
+      width: 100%;
+      padding: 4px 6px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #0b1322;
+      color: #dbeafe;
+      font-size: 0.76rem;
+    }
+    .cmd-panel {
+      margin-top: 10px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(8, 12, 22, 0.55);
+      padding: 10px;
+    }
+    .cmd-title {
+      margin: 0 0 8px;
+      font-size: 0.95rem;
+      font-weight: 650;
+      color: #d6e5ff;
+    }
+    .cmd-session {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .cmd-status {
+      font-size: 0.82rem;
+      color: #9fb2d5;
+    }
+    .owner-status {
+      margin-bottom: 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 6px 8px;
+      font-size: 0.82rem;
+      color: #c8d6ef;
+      background: rgba(3, 7, 14, 0.45);
+    }
+    .owner-status.ok {
+      border-color: rgba(34, 197, 94, 0.45);
+      color: #bbf7d0;
+    }
+    .owner-status.warn {
+      border-color: rgba(245, 158, 11, 0.45);
+      color: #fde68a;
+    }
+    .owner-status.err {
+      border-color: rgba(239, 68, 68, 0.45);
+      color: #fecaca;
+    }
+    .cmd-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .cmd-stop-row {
+      margin-top: 8px;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+    }
+    .cmd-actions-grid {
+      margin-top: 8px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 8px;
+    }
+    .cmd-pill {
+      margin-top: 8px;
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 8px;
+    }
+    .cmd-sliders {
+      margin-top: 8px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      background: rgba(3, 7, 14, 0.35);
+    }
+    .cmd-sliders .slider-title {
+      font-size: 0.82rem;
+      color: #9fb2d5;
+      margin-bottom: 6px;
+    }
+    .slider-row {
+      display: grid;
+      grid-template-columns: 64px 1fr 36px;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 6px;
+      font-size: 0.8rem;
+      color: #9fb2d5;
+    }
+    .slider-row input[type="range"] {
+      width: 100%;
+      padding: 0;
+      accent-color: #38bdf8;
+    }
+    .diag-grid {
+      margin-top: 8px;
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 6px;
+      font-size: 0.82rem;
+    }
+    .cmd-btn {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 10px 8px;
+      background: #14253c;
+      color: #d7e3f9;
+      font-weight: 650;
+      font-size: 0.9rem;
+      min-height: 44px;
+    }
+    .cmd-btn.emergency {
+      border-color: rgba(239, 68, 68, 0.45);
+      background: rgba(127, 29, 29, 0.55);
+      color: #fecaca;
+    }
+    .cmd-btn.hold {
+      background: #172f4d;
+    }
+    .cmd-btn.ghost {
+      background: #1a2432;
+      border-style: dashed;
+      color: #9fb2d5;
+    }
+    .cmd-btn.placeholder {
+      opacity: 0.92;
+    }
+    .cmd-btn.active {
+      background: #1d4c7a;
+      border-color: rgba(56, 189, 248, 0.65);
+      color: #e0f2ff;
+    }
+    .cmd-btn.toggle-on {
+      background: #14532d;
+      border-color: rgba(34, 197, 94, 0.65);
+      color: #dcfce7;
+    }
+    .controls {
+      margin-top: 10px;
+      display: grid;
+      gap: 8px;
+      grid-template-columns: 1fr;
+    }
+    input {
+      width: 100%;
+      padding: 10px;
+      border-radius: 9px;
+      border: 1px solid var(--line);
+      background: #0b1322;
+      color: var(--text);
+      font-size: 0.95rem;
+    }
+    .btn-row {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    button {
+      border: 0;
+      border-radius: 9px;
+      padding: 10px 12px;
+      background: var(--accent);
+      color: #001422;
+      font-weight: 650;
+      font-size: 0.95rem;
+    }
+    button.secondary {
+      background: #22304b;
+      color: #d7e3f9;
+      border: 1px solid var(--line);
+    }
+    .note {
+      font-size: 0.82rem;
+      color: #9fb2d5;
+    }
+    .note a {
+      color: #7fd4ff;
+    }
+    @media (max-width: 760px) {
+      .telemetry-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+      .imu3d-wrap {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
+</head>
+<body>
+  <main class="card">
+    <div class="header">
+      <h1>Robot Dog Live Video (Safari / WebRTC)</h1>
+      <div class="badge-group">
+        <div class="badge build" id="buildBadge">Build: pending</div>
+        <div class="badge" id="endpointBadge">Viewer: pending</div>
+      </div>
+    </div>
+
+    <div id="status" class="status warn">Connecting...</div>
+
+    <div class="video-wrap">
+      <video id="video" autoplay muted playsinline controls></video>
+    </div>
+
+    <section class="telemetry">
+      <h2>Live Telemetry (Read-only)</h2>
+      <div class="telemetry-grid">
+        <div class="telemetry-item"><div class="k">Battery</div><div class="v" id="tBattery">--</div></div>
+        <div class="telemetry-item"><div class="k">Battery State</div><div class="v" id="tBatteryState">--</div></div>
+        <div class="telemetry-item"><div class="k">Ultrasonic (cm)</div><div class="v" id="tSonic">--</div></div>
+        <div class="telemetry-item"><div class="k">IMU Roll</div><div class="v" id="tRoll">--</div></div>
+        <div class="telemetry-item"><div class="k">IMU Pitch</div><div class="v" id="tPitch">--</div></div>
+        <div class="telemetry-item"><div class="k">IMU Yaw</div><div class="v" id="tYaw">--</div></div>
+        <div class="telemetry-item"><div class="k">Stream</div><div class="v" id="tStream">--</div></div>
+        <div class="telemetry-item"><div class="k">Data Age</div><div class="v" id="tAge">--</div></div>
+        <div class="telemetry-item"><div class="k">Updated</div><div class="v" id="tUpdated">--</div></div>
+      </div>
+      <div class="imu3d-wrap">
+        <div class="imu3d-viewport">
+          <div class="imu3d-cube" id="imuCube">
+            <div class="imu3d-face front">Front</div>
+            <div class="imu3d-face back">Back</div>
+            <div class="imu3d-face right">Right</div>
+            <div class="imu3d-face left">Left</div>
+            <div class="imu3d-face top">Top</div>
+            <div class="imu3d-face bottom">Bottom</div>
+          </div>
+        </div>
+        <div class="imu3d-meta">
+          <div>Simple 3D IMU model (Safari-safe, no external lib)</div>
+          <div class="v" id="imu3dText">Roll 0.00 | Pitch 0.00 | Yaw 0.00</div>
+          <div class="imu3d-state" id="imu3dState">IMU 3D: live</div>
+          <div class="imu3d-tune">
+            <label>Smoothing
+              <select id="imuSmooth">
+                <option value="0.15">Fast</option>
+                <option value="0.25" selected>Medium</option>
+                <option value="0.35">Stable</option>
+              </select>
+            </label>
+            <label>Freeze on stale
+              <select id="imuFreeze">
+                <option value="1" selected>On</option>
+                <option value="0">Off</option>
+              </select>
+            </label>
+            <label>Roll scale
+              <input id="imuRollScale" type="number" min="0.2" max="3.0" step="0.1" value="1.0" />
+            </label>
+            <label>Pitch scale
+              <input id="imuPitchScale" type="number" min="0.2" max="3.0" step="0.1" value="1.0" />
+            </label>
+            <label>Yaw scale
+              <input id="imuYawScale" type="number" min="0.2" max="3.0" step="0.1" value="1.0" />
+            </label>
+          </div>
+        </div>
+      </div>
+      <div class="telemetry-note">Telemetry API: <span id="telemetryUrlLabel"></span></div>
+    </section>
+
+    <section class="cmd-panel">
+      <h2 class="cmd-title">Mobile Command (Safety-First MVP)</h2>
+      <div class="cmd-session">
+        <button id="requestBtn" class="cmd-btn" type="button">Request Control</button>
+        <button id="releaseBtn" class="cmd-btn secondary" type="button">Release Control</button>
+        <button id="armBtn" class="cmd-btn" type="button">Arm Commands</button>
+        <span class="cmd-status" id="cmdSessionStatus">Session: checking...</span>
+      </div>
+      <div class="owner-status warn" id="ownerStatus">Control lock: checking...</div>
+      <div class="cmd-grid">
+        <button class="cmd-btn hold" type="button" data-hold-action="turn_left">W</button>
+        <button class="cmd-btn hold" type="button" data-hold-action="forward">E</button>
+        <button class="cmd-btn hold" type="button" data-hold-action="turn_right">R</button>
+        <button class="cmd-btn hold" type="button" data-hold-action="left">S</button>
+        <button class="cmd-btn" id="relaxBtn" type="button">D RELAX</button>
+        <button class="cmd-btn hold" type="button" data-hold-action="right">F</button>
+        <button class="cmd-btn ghost placeholder" type="button" data-placeholder="x">X</button>
+        <button class="cmd-btn hold" type="button" data-hold-action="backward">C</button>
+        <button class="cmd-btn ghost placeholder" type="button" data-placeholder="v">V</button>
+      </div>
+      <div class="cmd-stop-row">
+        <button class="cmd-btn emergency" id="stopBtn" type="button">EMERGENCY STOP</button>
+        <button class="cmd-btn" id="stopPwmBtn" type="button">STOP PWM</button>
+      </div>
+      <div class="cmd-actions-grid">
+        <button class="cmd-btn" id="beepBtn" type="button">Beep</button>
+        <button class="cmd-btn" id="ledBtn" type="button">LED</button>
+        <button class="cmd-btn" id="calBtn" type="button">Cal</button>
+        <button class="cmd-btn placeholder" type="button" data-placeholder="tracking">Tracking</button>
+        <button class="cmd-btn placeholder" type="button" data-placeholder="face">Face</button>
+        <button class="cmd-btn placeholder" type="button" data-placeholder="imu">IMU Web</button>
+      </div>
+      <div class="cmd-pill">
+        <button class="cmd-btn placeholder" type="button" data-placeholder="yolo">Yolo Vision</button>
+      </div>
+      <div class="cmd-grid" style="margin-top:8px;">
+        <button class="cmd-btn" id="balanceBtn" type="button">Balance OFF</button>
+        <button class="cmd-btn placeholder" type="button" data-placeholder="horizon">Horizon OFF</button>
+        <button class="cmd-btn ghost placeholder" type="button" data-placeholder="reserved">Reserved</button>
+      </div>
+      <div class="cmd-sliders">
+        <div class="slider-title">Attitude Sliders (placeholder)</div>
+        <div class="slider-row"><span>Roll</span><input type="range" min="-20" max="20" value="0" disabled /><span>0</span></div>
+        <div class="slider-row"><span>Pitch</span><input type="range" min="-20" max="20" value="0" disabled /><span>0</span></div>
+        <div class="slider-row"><span>Yaw</span><input type="range" min="-20" max="20" value="0" disabled /><span>0</span></div>
+        <div class="slider-row"><span>Horizon</span><input type="range" min="-20" max="20" value="0" disabled /><span>0</span></div>
+        <div class="slider-row"><span>Height</span><input type="range" min="-20" max="20" value="0" disabled /><span>0</span></div>
+        <div class="slider-row"><span>Head</span><input type="range" min="40" max="140" value="90" disabled /><span>90</span></div>
+      </div>
+      <div class="telemetry-note">Commands require explicit ARM (except emergency stop/stop PWM).</div>
+      <div class="telemetry-note">Command API: <span id="commandUrlLabel"></span></div>
+      <div class="diag-grid">
+        <div class="telemetry-item"><div class="k">Diag Services</div><div class="v" id="dServices">--</div></div>
+        <div class="telemetry-item"><div class="k">Diag Ports</div><div class="v" id="dPorts">--</div></div>
+        <div class="telemetry-item"><div class="k">Diag Session</div><div class="v" id="dSession">--</div></div>
+      </div>
+      <div class="telemetry-note">Diagnostics API: <span id="diagnosticsUrlLabel"></span></div>
+    </section>
+
+    <div class="controls">
+      <input id="whepUrl" aria-label="WHEP URL" />
+      <div class="note">
+        Open this viewer page URL in Safari: <a id="viewerLink" href="#" target="_blank" rel="noopener"></a><br />
+        `.../whep` is signaling API endpoint (not a direct video webpage).
+      </div>
+      <div class="btn-row">
+        <button id="reconnectBtn" type="button">Reconnect</button>
+        <button id="startBtn" type="button" class="secondary">Tap to Start Audio/Video</button>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const statusEl = document.getElementById('status');
+    const videoEl = document.getElementById('video');
+    const whepInput = document.getElementById('whepUrl');
+    const buildBadgeEl = document.getElementById('buildBadge');
+    const badgeEl = document.getElementById('endpointBadge');
+    const viewerLinkEl = document.getElementById('viewerLink');
+    const reconnectBtn = document.getElementById('reconnectBtn');
+    const startBtn = document.getElementById('startBtn');
+
+    const tBattery = document.getElementById('tBattery');
+    const tBatteryState = document.getElementById('tBatteryState');
+    const tSonic = document.getElementById('tSonic');
+    const tRoll = document.getElementById('tRoll');
+    const tPitch = document.getElementById('tPitch');
+    const tYaw = document.getElementById('tYaw');
+    const tStream = document.getElementById('tStream');
+    const tAge = document.getElementById('tAge');
+    const tUpdated = document.getElementById('tUpdated');
+    const imuCube = document.getElementById('imuCube');
+    const imu3dText = document.getElementById('imu3dText');
+    const imu3dState = document.getElementById('imu3dState');
+    const imuSmooth = document.getElementById('imuSmooth');
+    const imuFreeze = document.getElementById('imuFreeze');
+    const imuRollScale = document.getElementById('imuRollScale');
+    const imuPitchScale = document.getElementById('imuPitchScale');
+    const imuYawScale = document.getElementById('imuYawScale');
+    const telemetryUrlLabel = document.getElementById('telemetryUrlLabel');
+    const commandUrlLabel = document.getElementById('commandUrlLabel');
+    const diagnosticsUrlLabel = document.getElementById('diagnosticsUrlLabel');
+    const cmdSessionStatus = document.getElementById('cmdSessionStatus');
+    const ownerStatus = document.getElementById('ownerStatus');
+    const armBtn = document.getElementById('armBtn');
+    const requestBtn = document.getElementById('requestBtn');
+    const releaseBtn = document.getElementById('releaseBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const relaxBtn = document.getElementById('relaxBtn');
+    const stopPwmBtn = document.getElementById('stopPwmBtn');
+    const beepBtn = document.getElementById('beepBtn');
+    const ledBtn = document.getElementById('ledBtn');
+    const calBtn = document.getElementById('calBtn');
+    const balanceBtn = document.getElementById('balanceBtn');
+    const holdButtons = Array.from(document.querySelectorAll('[data-hold-action]'));
+    const placeholderButtons = Array.from(document.querySelectorAll('[data-placeholder]'));
+    const dServices = document.getElementById('dServices');
+    const dPorts = document.getElementById('dPorts');
+    const dSession = document.getElementById('dSession');
+
+    let pc = null;
+    let sessionUrl = null;
+    let telemetryTimer = null;
+    let diagnosticsTimer = null;
+    let sessionTimer = null;
+    let holdTimer = null;
+    let activeHoldBtn = null;
+    const BUILD_LABEL = 'v1.13 | 2026-02-10 07:33';
+    let cmdArmed = false;
+    let balanceOn = false;
+    const imuRender = { roll: 0, pitch: 0, yaw: 0 };
+    const imuCfg = {
+      alpha: 0.25,
+      rollScale: 1.0,
+      pitchScale: 1.0,
+      yawScale: 1.0,
+      freezeOnStale: true,
+      stale: false,
+      offline: false,
+    };
+
+    function setStatus(text, level) {
+      statusEl.textContent = text;
+      statusEl.className = `status ${level}`;
+    }
+
+    function defaultWhepUrl() {
+      const p = new URLSearchParams(window.location.search);
+      const fromQuery = p.get('whep');
+      if (fromQuery) return fromQuery;
+
+      const proto = window.location.protocol === 'https:' ? 'https:' : 'http:';
+      const host = window.location.hostname || '192.168.0.32';
+      return `${proto}//${host}:8889/robotdog/whep`;
+    }
+
+    function defaultTelemetryUrl() {
+      const p = new URLSearchParams(window.location.search);
+      const fromQuery = p.get('telemetry');
+      if (fromQuery) return fromQuery;
+      const proto = window.location.protocol === 'https:' ? 'https:' : 'http:';
+      const host = window.location.hostname || '192.168.0.32';
+      return `${proto}//${host}:8090/api/telemetry`;
+    }
+
+    function defaultCommandBaseUrl() {
+      const p = new URLSearchParams(window.location.search);
+      const fromQuery = p.get('api');
+      if (fromQuery) return fromQuery.replace(/\/$/, '');
+      const proto = window.location.protocol === 'https:' ? 'https:' : 'http:';
+      const host = window.location.hostname || '192.168.0.32';
+      return `${proto}//${host}:8090`;
+    }
+
+    function commandUrl(path) {
+      return `${defaultCommandBaseUrl()}${path}`;
+    }
+
+    function diagnosticsUrl() {
+      return commandUrl('/api/diagnostics');
+    }
+
+    function viewerPageUrl() {
+      return `${window.location.origin}/webrtc_view.html`;
+    }
+
+    function fmtNum(v, digits = 2) {
+      if (typeof v !== 'number' || Number.isNaN(v)) return '--';
+      return v.toFixed(digits);
+    }
+
+    function fmtAge(ms) {
+      if (typeof ms !== 'number' || Number.isNaN(ms)) return '--';
+      if (ms >= 1000) return `${(ms / 1000).toFixed(1)} s`;
+      return `${ms} ms`;
+    }
+
+    function updateTelemetryView(d) {
+      const ageMs = d?.source_health?.age_ms;
+      const stale = typeof ageMs === 'number' && ageMs > 1500;
+      const roll = typeof d?.imu?.roll === 'number' ? d.imu.roll : null;
+      const pitch = typeof d?.imu?.pitch === 'number' ? d.imu.pitch : null;
+      const yaw = typeof d?.imu?.yaw === 'number' ? d.imu.yaw : null;
+      tBattery.textContent = d?.battery?.voltage == null ? '--' : `${fmtNum(d.battery.voltage, 2)} V`;
+      tBatteryState.textContent = d?.battery?.state ?? '--';
+      tSonic.textContent = d?.ultrasonic_cm == null ? '--' : fmtNum(d.ultrasonic_cm, 1);
+      tRoll.textContent = roll == null ? '--' : fmtNum(roll, 2);
+      tPitch.textContent = pitch == null ? '--' : fmtNum(pitch, 2);
+      tYaw.textContent = yaw == null ? '--' : fmtNum(yaw, 2);
+      tStream.textContent = stale ? `stale (${d?.stream?.status ?? 'unknown'})` : (d?.stream?.status ?? '--');
+      tAge.textContent = fmtAge(ageMs);
+      tUpdated.textContent = d?.ts ? new Date(d.ts * 1000).toLocaleTimeString() : '--';
+      updateImu3d(roll, pitch, yaw, stale, false);
+    }
+
+    function syncImuCfg() {
+      const alpha = Number.parseFloat(imuSmooth?.value ?? '0.25');
+      const rollScale = Number.parseFloat(imuRollScale?.value ?? '1.0');
+      const pitchScale = Number.parseFloat(imuPitchScale?.value ?? '1.0');
+      const yawScale = Number.parseFloat(imuYawScale?.value ?? '1.0');
+      imuCfg.alpha = Number.isFinite(alpha) ? Math.min(0.8, Math.max(0.05, alpha)) : 0.25;
+      imuCfg.rollScale = Number.isFinite(rollScale) ? Math.min(3.0, Math.max(0.2, rollScale)) : 1.0;
+      imuCfg.pitchScale = Number.isFinite(pitchScale) ? Math.min(3.0, Math.max(0.2, pitchScale)) : 1.0;
+      imuCfg.yawScale = Number.isFinite(yawScale) ? Math.min(3.0, Math.max(0.2, yawScale)) : 1.0;
+      imuCfg.freezeOnStale = (imuFreeze?.value ?? '1') === '1';
+    }
+
+    function updateImu3dState() {
+      if (!imu3dState) return;
+      if (imuCfg.offline) {
+        imu3dState.className = 'imu3d-state offline';
+        imu3dState.textContent = 'IMU 3D: offline';
+        return;
+      }
+      if (imuCfg.stale) {
+        imu3dState.className = 'imu3d-state stale';
+        imu3dState.textContent = imuCfg.freezeOnStale ? 'IMU 3D: stale (freeze)' : 'IMU 3D: stale';
+        return;
+      }
+      imu3dState.className = 'imu3d-state';
+      imu3dState.textContent = 'IMU 3D: live';
+    }
+
+    function updateImu3d(roll, pitch, yaw, stale, offline) {
+      syncImuCfg();
+      imuCfg.stale = !!stale;
+      imuCfg.offline = !!offline;
+      updateImu3dState();
+
+      if (!imuCube || roll == null || pitch == null || yaw == null) return;
+      if ((imuCfg.stale || imuCfg.offline) && imuCfg.freezeOnStale) return;
+
+      const targetRoll = roll * imuCfg.rollScale;
+      const targetPitch = pitch * imuCfg.pitchScale;
+      const targetYaw = yaw * imuCfg.yawScale;
+
+      imuRender.roll = (imuRender.roll * (1 - imuCfg.alpha)) + (targetRoll * imuCfg.alpha);
+      imuRender.pitch = (imuRender.pitch * (1 - imuCfg.alpha)) + (targetPitch * imuCfg.alpha);
+      imuRender.yaw = (imuRender.yaw * (1 - imuCfg.alpha)) + (targetYaw * imuCfg.alpha);
+
+      const x = -imuRender.pitch;
+      const y = imuRender.yaw;
+      const z = imuRender.roll;
+      imuCube.style.transform = `rotateX(${x.toFixed(2)}deg) rotateY(${y.toFixed(2)}deg) rotateZ(${z.toFixed(2)}deg)`;
+      if (imu3dText) {
+        imu3dText.textContent = `Roll ${imuRender.roll.toFixed(2)} | Pitch ${imuRender.pitch.toFixed(2)} | Yaw ${imuRender.yaw.toFixed(2)}`;
+      }
+    }
+
+    async function pollTelemetry() {
+      const url = defaultTelemetryUrl();
+      telemetryUrlLabel.textContent = url;
+      try {
+        const r = await fetch(url, { cache: 'no-store' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = await r.json();
+        updateTelemetryView(data);
+      } catch (_) {
+        updateTelemetryView(null);
+        tStream.textContent = 'backend_down';
+        updateImu3d(null, null, null, true, true);
+      }
+    }
+
+    function updateDiagnosticsView(d) {
+      if (!d) {
+        dServices.textContent = 'n/a';
+        dPorts.textContent = 'n/a';
+        dSession.textContent = 'n/a';
+        return;
+      }
+      const svc = d.services || {};
+      const svcOk = Object.values(svc).filter(Boolean).length;
+      const svcTotal = Object.keys(svc).length;
+      dServices.textContent = `${svcOk}/${svcTotal} up`;
+
+      const ports = d.ports || {};
+      const portOk = Object.values(ports).filter(Boolean).length;
+      const portTotal = Object.keys(ports).length;
+      dPorts.textContent = `${portOk}/${portTotal} open`;
+
+      const lock = d.session?.control_lock || 'unknown';
+      dSession.textContent = `${lock}`;
+    }
+
+    async function pollDiagnostics() {
+      diagnosticsUrlLabel.textContent = diagnosticsUrl();
+      try {
+        const r = await fetch(diagnosticsUrl(), { cache: 'no-store' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const d = await r.json();
+        updateDiagnosticsView(d);
+      } catch (_) {
+        updateDiagnosticsView(null);
+      }
+    }
+
+    function renderOwnerLock(lock, ownerHint) {
+      if (lock === 'owned_by_mobile') {
+        ownerStatus.className = 'owner-status ok';
+        ownerStatus.textContent = 'Control lock: owned by this mobile session.';
+      } else if (lock === 'owned_by_other') {
+        ownerStatus.className = 'owner-status err';
+        ownerStatus.textContent = `Control lock: owned by ${ownerHint || 'another client'}.`;
+      } else {
+        ownerStatus.className = 'owner-status warn';
+        ownerStatus.textContent = 'Control lock: available or unknown.';
+      }
+    }
+
+    function renderSession(armed, ttlMs, lock, ownerHint) {
+      cmdArmed = !!armed;
+      armBtn.textContent = cmdArmed ? 'Disarm Commands' : 'Arm Commands';
+      if (cmdArmed) {
+        cmdSessionStatus.textContent = `Session: armed (${Math.max(0, Math.floor((ttlMs || 0) / 1000))}s TTL)`;
+      } else {
+        cmdSessionStatus.textContent = 'Session: disarmed';
+      }
+      renderOwnerLock(lock, ownerHint);
+    }
+
+    function renderBalance() {
+      if (!balanceBtn) return;
+      balanceBtn.textContent = `Balance ${balanceOn ? 'ON' : 'OFF'}`;
+      balanceBtn.classList.toggle('toggle-on', balanceOn);
+    }
+
+    async function pollSession() {
+      try {
+        const r = await fetch(commandUrl('/api/session'), { cache: 'no-store' });
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const d = await r.json();
+        renderSession(d.armed, d.arm_ttl_ms, d.control_lock, d.owner_hint);
+      } catch (_) {
+        renderSession(false, 0, 'available_or_unknown', '');
+      }
+    }
+
+    async function setArmed(armed) {
+      const r = await fetch(commandUrl('/api/session'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ armed: !!armed }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      renderSession(d.armed, d.arm_ttl_ms, d.control_lock, d.owner_hint);
+    }
+
+    async function sessionAction(action) {
+      const r = await fetch(commandUrl('/api/session'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action }),
+      });
+      const d = await r.json().catch(() => ({}));
+      if (!r.ok || !d.ok) throw new Error(d.error || `HTTP ${r.status}`);
+      renderSession(d.armed, d.arm_ttl_ms, d.control_lock, d.owner_hint);
+    }
+
+    async function sendCommand(action, ignoreErrors = false) {
+      try {
+        const r = await fetch(commandUrl('/api/command'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ action }),
+        });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || !d.ok) {
+          const emsg = d.detail ? `${d.error || 'error'} ${d.detail}` : (d.error || `HTTP ${r.status}`);
+          throw new Error(emsg);
+        }
+        renderSession(d.armed, d.arm_ttl_ms, d.control_lock, d.owner_hint);
+        return true;
+      } catch (e) {
+        if ((e.message || '').includes('busy')) {
+          const owner = e.message.includes('OWNER:') ? e.message.split('OWNER:').pop() : '';
+          renderOwnerLock('owned_by_other', owner.trim());
+          setStatus(`Control busy: ${owner ? owner.trim() : 'another owner'}; request handoff or wait.`, 'warn');
+          return false;
+        }
+        if (!ignoreErrors) setStatus(`Command error: ${e.message}`, 'err');
+        return false;
+      }
+    }
+
+    function clearHoldState(sendStop) {
+      if (holdTimer) clearInterval(holdTimer);
+      holdTimer = null;
+      if (activeHoldBtn) activeHoldBtn.classList.remove('active');
+      activeHoldBtn = null;
+      if (sendStop) sendCommand('stop', true).catch(() => {});
+    }
+
+    function startHold(action, btn) {
+      clearHoldState(false);
+      activeHoldBtn = btn;
+      if (activeHoldBtn) activeHoldBtn.classList.add('active');
+      sendCommand(action, false).catch(() => {});
+      holdTimer = setInterval(() => {
+        sendCommand(action, true).catch(() => {});
+      }, 250);
+    }
+
+    async function waitIceGatheringDone(peer) {
+      if (peer.iceGatheringState === 'complete') return;
+      await new Promise((resolve) => {
+        const onState = () => {
+          if (peer.iceGatheringState === 'complete') {
+            peer.removeEventListener('icegatheringstatechange', onState);
+            resolve();
+          }
+        };
+        peer.addEventListener('icegatheringstatechange', onState);
+        setTimeout(resolve, 2000);
+      });
+    }
+
+    async function cleanupPeer() {
+      if (pc) {
+        try { pc.ontrack = null; } catch (_) {}
+        try { pc.close(); } catch (_) {}
+      }
+      pc = null;
+
+      if (sessionUrl) {
+        try { await fetch(sessionUrl, { method: 'DELETE' }); } catch (_) {}
+      }
+      sessionUrl = null;
+    }
+
+    async function connectWhep() {
+      await cleanupPeer();
+
+      const whepUrl = whepInput.value.trim();
+      badgeEl.textContent = `Viewer: ${viewerPageUrl()}`;
+      setStatus('Creating peer connection...', 'warn');
+
+      pc = new RTCPeerConnection({ iceServers: [] });
+      pc.addTransceiver('video', { direction: 'recvonly' });
+
+      pc.ontrack = (ev) => {
+        const [stream] = ev.streams;
+        if (!stream) return;
+        videoEl.srcObject = stream;
+        videoEl.play().catch(() => {});
+        setStatus('Live video active (WebRTC).', 'ok');
+      };
+
+      pc.onconnectionstatechange = () => {
+        const s = pc ? pc.connectionState : 'closed';
+        if (s === 'connected') setStatus('Peer connected.', 'ok');
+        else if (s === 'connecting') setStatus('Peer connecting...', 'warn');
+        else if (s === 'failed' || s === 'disconnected') setStatus(`Peer state: ${s}`, 'err');
+      };
+
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      await waitIceGatheringDone(pc);
+
+      setStatus('Sending WHEP offer...', 'warn');
+      const resp = await fetch(whepUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/sdp',
+          'Accept': 'application/sdp'
+        },
+        body: pc.localDescription.sdp
+      });
+
+      if (!resp.ok) {
+        const t = await resp.text();
+        throw new Error(`WHEP POST failed (${resp.status}) ${t.slice(0, 180)}`);
+      }
+
+      sessionUrl = resp.headers.get('Location');
+      if (sessionUrl && !/^https?:\/\//i.test(sessionUrl)) {
+        sessionUrl = new URL(sessionUrl, whepUrl).toString();
+      }
+
+      const answerSdp = await resp.text();
+      await pc.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+      setStatus('WHEP answer applied. Waiting for media...', 'warn');
+    }
+
+    async function userStart() {
+      try {
+        videoEl.muted = true;
+        await videoEl.play();
+      } catch (_) {}
+    }
+
+    whepInput.value = defaultWhepUrl();
+    buildBadgeEl.textContent = `Build: ${BUILD_LABEL}`;
+    whepInput.title = 'WHEP signaling endpoint (API), not a direct browser video page';
+    badgeEl.textContent = `Viewer: ${viewerPageUrl()}`;
+    viewerLinkEl.href = viewerPageUrl();
+    viewerLinkEl.textContent = viewerPageUrl();
+    commandUrlLabel.textContent = commandUrl('/api/command');
+    diagnosticsUrlLabel.textContent = diagnosticsUrl();
+
+    pollTelemetry().catch(() => {});
+    telemetryTimer = setInterval(() => {
+      pollTelemetry().catch(() => {});
+    }, 1000);
+    pollSession().catch(() => {});
+    sessionTimer = setInterval(() => {
+      pollSession().catch(() => {});
+    }, 1000);
+    pollDiagnostics().catch(() => {});
+    diagnosticsTimer = setInterval(() => {
+      pollDiagnostics().catch(() => {});
+    }, 2500);
+
+    reconnectBtn.addEventListener('click', () => {
+      connectWhep().catch((err) => setStatus(`Connect error: ${err.message}`, 'err'));
+    });
+
+    startBtn.addEventListener('click', () => {
+      userStart().catch(() => {});
+    });
+
+    armBtn.addEventListener('click', () => {
+      setArmed(!cmdArmed).catch((e) => setStatus(`Session error: ${e.message}`, 'err'));
+    });
+    requestBtn.addEventListener('click', () => {
+      sessionAction('request').catch((e) => setStatus(`Request control error: ${e.message}`, 'err'));
+    });
+    releaseBtn.addEventListener('click', () => {
+      clearHoldState(true);
+      sessionAction('release').catch((e) => setStatus(`Release control error: ${e.message}`, 'err'));
+    });
+    stopBtn.addEventListener('click', () => {
+      clearHoldState(false);
+      sendCommand('stop').catch(() => {});
+    });
+    relaxBtn.addEventListener('click', () => {
+      clearHoldState(true);
+      sendCommand('relax').catch(() => {});
+    });
+    stopPwmBtn.addEventListener('click', () => {
+      clearHoldState(true);
+      sendCommand('stop_pwm').catch(() => {});
+    });
+    beepBtn?.addEventListener('click', () => {
+      sendCommand('beep').catch(() => {});
+    });
+    ledBtn?.addEventListener('click', () => {
+      sendCommand('led').catch(() => {});
+    });
+    calBtn?.addEventListener('click', () => {
+      sendCommand('cal').catch(() => {});
+    });
+    balanceBtn?.addEventListener('click', async () => {
+      const action = balanceOn ? 'balance_off' : 'balance_on';
+      const ok = await sendCommand(action);
+      if (ok) {
+        balanceOn = !balanceOn;
+        renderBalance();
+      }
+    });
+    placeholderButtons.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const key = btn.getAttribute('data-placeholder') || 'feature';
+        if (key === 'imu') {
+          document.querySelector('.telemetry')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+        }
+        setStatus(`Placeholder control: ${key} (not wired yet).`, 'warn');
+      });
+    });
+    [imuSmooth, imuFreeze, imuRollScale, imuPitchScale, imuYawScale].forEach((el) => {
+      if (!el) return;
+      el.addEventListener('change', () => {
+        syncImuCfg();
+        updateImu3dState();
+      });
+    });
+    holdButtons.forEach((btn) => {
+      const action = btn.dataset.holdAction;
+      const start = (ev) => {
+        ev.preventDefault();
+        startHold(action, btn);
+      };
+      const end = (ev) => {
+        ev.preventDefault();
+        clearHoldState(true);
+      };
+      btn.addEventListener('pointerdown', start);
+      btn.addEventListener('pointerup', end);
+      btn.addEventListener('pointercancel', end);
+      btn.addEventListener('pointerleave', (ev) => {
+        if (activeHoldBtn === btn && ev.buttons === 0) end(ev);
+      });
+      btn.addEventListener('touchstart', start, { passive: false });
+      btn.addEventListener('touchend', end, { passive: false });
+    });
+
+    window.addEventListener('beforeunload', () => {
+      if (telemetryTimer) clearInterval(telemetryTimer);
+      if (sessionTimer) clearInterval(sessionTimer);
+      if (diagnosticsTimer) clearInterval(diagnosticsTimer);
+      clearHoldState(true);
+      cleanupPeer().catch(() => {});
+    });
+
+    connectWhep().catch((err) => {
+      setStatus(`Connect error: ${err.message}`, 'err');
+    });
+    renderBalance();
+  </script>
+</body>
+</html>

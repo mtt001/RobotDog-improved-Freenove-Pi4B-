@@ -10,6 +10,8 @@
      Status/FPS/HUD overlay controller extracted from frame_update_controller.py.
      Draws AI/CV/YOLO hints, telemetry, FPS, and HSV overlays on the main frame.
 
+ v1.05  (2026-02-09 21:31)    : Append IMU web viewer reachability line in IMU pane
+     • Surface mtDogMain IMU web quick-launch health (`live/checking/offline`) beside IMU attitude text.
  v1.04  (2026-02-02 20:31)    : Route IMU attitude text into bottom message panel.
  v1.03  (2026-02-01)          : Connection-aware FPS display
      • Show RX/UI FPS as 0 when dog video is stalled/disconnected.
@@ -293,6 +295,14 @@ class StatusOverlayController:
                 imu_hz = 2.0
         hz_text = f"{imu_hz:.1f}".rstrip("0").rstrip(".")
 
+        viewer_state = str(getattr(host, "imu_viewer_status", "checking") or "checking").strip().lower()
+        if viewer_state == "live":
+            viewer_html = "<div style='color:#5eea98;'>Web Viewer : live</div>"
+        elif viewer_state == "offline":
+            viewer_html = "<div style='color:#ff8a8a;'>Web Viewer : offline</div>"
+        else:
+            viewer_html = "<div style='color:#9fa8b2;'>Web Viewer : checking...</div>"
+
         imu_html = ""
         if dog_online:
             if imu_ts > 0.0:
@@ -315,6 +325,7 @@ class StatusOverlayController:
                     f"<div style='color:{line1};'>Pitch : {imu_pitch:.1f}deg</div>"
                     f"<div style='color:{line2};'>Roll  : {imu_roll:.1f}deg</div>"
                     f"<div style='color:{line3};'>Yaw   : {imu_yaw:.1f}deg</div>"
+                    f"{viewer_html}"
                 )
             else:
                 imu_html = (
@@ -322,6 +333,7 @@ class StatusOverlayController:
                     "<div style='color:#8b94a1;'>Pitch : --.-deg</div>"
                     "<div style='color:#8b94a1;'>Roll  : --.-deg</div>"
                     "<div style='color:#8b94a1;'>Yaw   : --.-deg</div>"
+                    f"{viewer_html}"
                 )
         else:
             imu_html = (
@@ -329,6 +341,7 @@ class StatusOverlayController:
                 "<div style='color:#8b94a1;'>Pitch : --.-deg</div>"
                 "<div style='color:#8b94a1;'>Roll  : --.-deg</div>"
                 "<div style='color:#8b94a1;'>Yaw   : --.-deg</div>"
+                f"{viewer_html}"
             )
         host._imu_status_text = imu_html
 

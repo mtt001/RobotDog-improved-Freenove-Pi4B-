@@ -3,8 +3,14 @@ IMU Viewer Client (Simple)
 Description:
   Three.js simple model viewer with IMU polling and diagnostics.
 Version:
-  2026.02.07-5
+  2026.02.10-6
 Revision History:
+  2026-02-10 17:46 - Invert roll sign to fix left/right roll direction.
+  2026-02-10 17:30 - Swap model pitch/yaw axis application while keeping labels.
+  2026-02-10 17:20 - Swap IMU roll/pitch inputs to match observed physical motion.
+  2026-02-10 17:07 - Revert roll/pitch axis application per updated mapping check.
+  2026-02-10 17:01 - Swap roll/pitch axis application per updated IMU orientation request.
+  2026-02-10 16:55 - Align IMU axis mapping to Y-forward, X-left-right, Z-up convention.
   2026-02-07 15:14 - Added top-left telemetry line with video FPS overlay.
   2026-02-07 15:06 - Load live_video.js via safe dynamic import so IMU/telemetry still run if missing.
   2026-02-07 14:46 - Added live video auto-selection (H264-first, MJPEG fallback).
@@ -212,11 +218,11 @@ async function pollImu() {
       statusEl.textContent = 'live';
       offlineState.consecutiveFailures = 0;
       offlineState.lastOkMs = Date.now();
-      target.roll = data.roll;
-      target.pitch = data.pitch;
+      target.roll = data.pitch;
+      target.pitch = data.roll;
       target.yaw = data.yaw;
-      rollEl.textContent = data.roll.toFixed(2);
-      pitchEl.textContent = data.pitch.toFixed(2);
+      rollEl.textContent = data.pitch.toFixed(2);
+      pitchEl.textContent = data.roll.toFixed(2);
       yawEl.textContent = data.yaw.toFixed(2);
       updateLastOkAge(Date.now());
     } else {
@@ -269,9 +275,11 @@ function animate() {
   smooth.pitch += (target.pitch - smooth.pitch) * alpha;
   smooth.yaw += (target.yaw - smooth.yaw) * alpha;
 
-  dogGroup.rotation.x = degToRad(smooth.pitch);
-  dogGroup.rotation.y = degToRad(smooth.yaw);
-  dogGroup.rotation.z = degToRad(smooth.roll);
+  // dogGroup.rotation.x = degToRad(smooth.pitch); // Apply pitch to X-axis rotation
+  // dogGroup.rotation.y = degToRad(smooth.roll);  // Apply roll to Y-axis rotation
+  dogGroup.rotation.x = degToRad(-smooth.roll); // Apply roll to X-axis rotation
+  dogGroup.rotation.y = degToRad(smooth.yaw);   // Apply yaw to Y-axis rotation
+  dogGroup.rotation.z = degToRad(smooth.pitch); // Apply pitch to Z-axis rotation
 
   renderer.render(scene, camera);
 }

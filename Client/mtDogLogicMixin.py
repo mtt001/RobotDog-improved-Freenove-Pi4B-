@@ -6,6 +6,18 @@
  File   : mtDogLogicMixin.py
  Author : MT & Copilot ChatGPT
 
+ v2.20  (2026-02-08 12:06)
+     • In Mac mode, status now probes the selected video backend path (SFU RTSP or legacy socket).
+     • Fix false "Dog Video Ready" when SFU is selected but only legacy 8001 probe is reachable.
+ v2.19  (2026-02-08 11:27)
+     • Add testable `motion_key_to_command` helper for deterministic key mapping verification.
+     • `send_motion_command` now delegates mapping to helper (no behavior change).
+ v2.18  (2026-02-08 11:19)
+     • Enforce header-update discipline on every code edit (timestamped revision entry required).
+ v2.17  (2026-02-08 11:08)
+     • Restore legacy W/E/R/S/D/F/C motion mapping used by UI buttons.
+     • Keep D as Relax (and delayed STOP_PWM), matching original Freenove behavior.
+     • Avoid false-red SFU video status while waiting for first frame after reconnect.
  v2.16  (2026-02-08)
      • Restore standard WASD+QE key mapping for send_motion_command.
      • Allow motion commands based on control channel health (ignore video status).
@@ -146,7 +158,11 @@ class DogLogicMixin:
                 else:
                     if last <= 0.0:
                         # Connected but no frame received yet.
-                        self.server_video_ok = False
+                        # Keep UI from flashing red if SFU endpoint itself is reachable.
+                        try:
+                            self.server_video_ok = bool(self._probe_selected_video_path())
+                        except Exception:
+                            self.server_video_ok = False
                         self.video_stall = False
                     else:
                         try:
@@ -220,7 +236,10 @@ class DogLogicMixin:
             return
 
         ctrl_ok = self.test_tcp_port(self.ip, self.control_port)
-        video_ok = self.test_tcp_port(self.ip, self.video_port)
+        try:
+            video_ok = bool(self._probe_selected_video_path())
+        except Exception:
+            video_ok = False
 
         self.server_control_ok = ctrl_ok
         self.server_video_ok = video_ok
@@ -934,33 +953,21 @@ class DogLogicMixin:
             print(f"[CMD] stop failed: {e}")
 
     def send_motion_command(self, key_char: str, speed_override: int | None = None):
-        """Map WASD+QE to CMD_* and send in Dog mode.
-        
-        W: Forward
-        S: Backward
-        A: Turn Left
-        D: Turn Right
-        Q: Step Left (Strafe)
-        E: Step Right (Strafe)
+        """Map legacy W/E/R/S/D/F/C keys to CMD_* and send over control channel.
+
+        W: Turn Left
+        E: Forward
+        R: Turn Right
+        S: Left (strafe)
+        D: Relax (with delayed STOP_PWM)
+        F: Right (strafe)
+        C: Backward
         Space: Stop (handled via send_stop_motion)
 
         speed_override: Optional int speed (2..10) to use for this one command.
         """
         key = key_char.lower()
-        cmd_str = None
-
-        if key == "w":
-            cmd_str = CMD.CMD_MOVE_FORWARD
-        elif key == "s":
-            cmd_str = CMD.CMD_MOVE_BACKWARD
-        elif key == "a":
-            cmd_str = CMD.CMD_TURN_LEFT
-        elif key == "d":
-            cmd_str = CMD.CMD_TURN_RIGHT
-        elif key == "q":
-            cmd_str = CMD.CMD_MOVE_LEFT
-        elif key == "e":
-            cmd_str = CMD.CMD_MOVE_RIGHT
+        cmd_str = self.motion_key_to_command(key)
 
         if cmd_str is None:
             return
@@ -1046,3 +1053,16 @@ class DogLogicMixin:
                 print(f"[CMD] (Dog) D → scheduled {CMD.CMD_STOP_PWM} in {stop_delay_s:.1f}s")
         except Exception as e:
             print(f"[CMD] send failed: {e}")
+    def motion_key_to_command(self, key_char: str):
+        """Return command constant for legacy motion key, or None if unsupported."""
+        key = str(key_char or "").lower()
+        mapping = {
+            "w": CMD.CMD_TURN_LEFT,
+            "e": CMD.CMD_MOVE_FORWARD,
+            "r": CMD.CMD_TURN_RIGHT,
+            "s": CMD.CMD_MOVE_LEFT,
+            "d": CMD.CMD_RELAX,
+            "f": CMD.CMD_MOVE_RIGHT,
+            "c": CMD.CMD_MOVE_BACKWARD,
+        }
+        return mapping.get(key)

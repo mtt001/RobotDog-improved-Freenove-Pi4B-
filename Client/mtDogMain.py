@@ -15,6 +15,19 @@ os.environ["OPENCV_VIDEOIO_DEBUG"] = "0"
         - `VIDEO_BACKEND = "legacy_socket"` (original Pi 8001 JPEG stream)
      2) Run: `python3 mtDogMain.py`
 
+ v3.37  (2026-02-08 12:06)    : SFU startup readiness uses control-first gate
+     • Startup now allows Dog mode for SFU backend when IP/control are healthy.
+     • Video probe remains diagnostic; RTSP source is allowed to warm up after connect.
+ v3.38  (2026-02-09 21:31)    : Add IMU web viewer quick-launch and reachability badge
+     • Add `IMU Web` button to open Pi-hosted WebRTC/telemetry page directly from mtDogMain.
+     • Add periodic viewer reachability probe and status badge (live/checking/offline).
+ v3.36  (2026-02-08 11:19)    : Enforce header-update discipline on every code edit
+     • Team rule reminder applied: every functional edit must include a timestamped header revision entry.
+ v3.35  (2026-02-08 11:08)    : Restore legacy motion keys + reconnect UX alignment
+     • Restore W/E/R/S/D/F/C motion mapping to match on-screen Action Keys and firmware command map.
+     • Keep D as Relax (with delayed STOP_PWM) instead of turn-right.
+     • Avoid temporary false-red SFU video status before first frame arrives after reconnect.
+     • In SFU mode, allow reconnect to proceed even if first RTSP open attempt fails (read loop auto-retries).
  v3.34  (2026-02-08 10:45)    : Restore WASD+QE motion keys
      • Reverted experimental motion keys to standard W/S (fwd/back), A/D (turns), Q/E (strafe).
      • Fixed command blocking when video backend is not "dog" (allow blind control).
@@ -336,6 +349,8 @@ from mtDogBallTrack import (
 )  # <--- CHANGED: Import from merged file
 import threading
 import time
+import socket
+from urllib.parse import urlparse
 
 import numpy as np
 import cv2
@@ -345,8 +360,8 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QHBoxLayout, QGridLayout, QFrame, QSizePolicy,
     QSlider, QComboBox, QLineEdit, QCheckBox, QDoubleSpinBox, QSpinBox
 )
-from PyQt5.QtCore import Qt, QTimer, QEvent, QRect, QPoint
-from PyQt5.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QFont
+from PyQt5.QtCore import Qt, QTimer, QEvent, QRect, QPoint, QUrl
+from PyQt5.QtGui import QPixmap, QImage, QPainter, QPen, QColor, QFont, QDesktopServices
 
 from ui.ai_hist_windows import AIVisionHistogramWindow
 from ui.common_widgets import ClickableLabel
@@ -386,6 +401,8 @@ from config.mtDogConfig import (
     VIDEO_TARGET_WIDTH,
     VIDEO_TARGET_HEIGHT,
     VIDEO_TARGET_FPS,
+    IMU_VIEWER_URL,
+    IMU_VIEWER_DIAG_URL,
 )
 from mtDogLogicMixin import DogLogicMixin
 
@@ -904,6 +921,12 @@ class CameraWindow(QWidget, DogLogicMixin):
         self.video_target_width = int(VIDEO_TARGET_WIDTH)
         self.video_target_height = int(VIDEO_TARGET_HEIGHT)
         self.video_target_fps = int(VIDEO_TARGET_FPS)
+        self.imu_viewer_url = str(IMU_VIEWER_URL).strip()
+        self.imu_viewer_diag_url = str(IMU_VIEWER_DIAG_URL).strip()
+        self.imu_viewer_reachable = False
+        self.imu_viewer_status = "checking"
+        self.imu_viewer_last_ok_ts = 0.0
+        self.imu_viewer_last_err = ""
         # In SFU mode we only need command channel from dog_client; camera is pulled from SFU RTSP.
         self.external_video_stream = self.video_backend == "sfu_rtsp"
 
@@ -1032,6 +1055,10 @@ class CameraWindow(QWidget, DogLogicMixin):
 
         # ---------- Telemetry poll timer (Dog-mode only) ----------
         self.telemetry.start()
+        self.imu_viewer_probe_timer = QTimer()
+        self.imu_viewer_probe_timer.timeout.connect(self._probe_imu_viewer_health)
+        self.imu_viewer_probe_timer.start(2000)
+        self._probe_imu_viewer_health()
 
         # ---------- Initial probe (auto-enter Dog mode when reachable) ----------
         self._startup_initial_probe()
@@ -1196,7 +1223,9 @@ class CameraWindow(QWidget, DogLogicMixin):
             ip_ok = self.ping_ip(self.ip)
             ctrl_ok = self.test_tcp_port(self.ip, self.control_port)
             video_ok = self._probe_selected_video_path()
-            ok = ip_ok and ctrl_ok and video_ok
+            backend = str(getattr(self, "video_backend", "legacy_socket") or "legacy_socket").strip().lower()
+            must_have_video = backend != "sfu_rtsp"
+            ok = ip_ok and ctrl_ok and (video_ok or not must_have_video)
             self.server_ip_ok = bool(ip_ok)
             self.server_control_ok = bool(ctrl_ok)
             self.server_video_ok = bool(video_ok)
@@ -1243,6 +1272,10 @@ class CameraWindow(QWidget, DogLogicMixin):
         if not ok:
             self.video_source_last_error = getattr(src, "last_err", "") or "video source open failed"
             print(f"[VIDEO] Backend={self.video_backend} open failed: {self.video_source_last_error}")
+            # SFU/RTSP path can fail on the very first open during publisher warm-up.
+            # Keep Dog mode active and allow read() to auto-retry opening.
+            if str(getattr(self, "video_backend", "")).strip().lower() == "sfu_rtsp":
+                return True
         else:
             self.video_source_last_error = ""
             print(f"[VIDEO] Backend={self.video_backend} ready.")
@@ -1543,6 +1576,10 @@ class CameraWindow(QWidget, DogLogicMixin):
         panel_layout.addStretch()
 
         section_builder.build_system(panel_layout)
+        self.imu_web_status_label = QLabel("IMU Web: checking...")
+        self.imu_web_status_label.setStyleSheet("color:#9fb0c3; font-size:11px; padding-top:2px;")
+        panel_layout.addWidget(self.imu_web_status_label)
+        self._update_imu_web_status_label()
 
         self.ctrl_panel.setLayout(panel_layout)
 
@@ -1622,6 +1659,7 @@ class CameraWindow(QWidget, DogLogicMixin):
         self.btn_Face.clicked.connect(self.handle_face_button)
 
         self.btn_play.clicked.connect(self.handle_play_button)
+        self.btn_imu_viewer.clicked.connect(self.handle_open_imu_viewer)
         self.btn_quit.clicked.connect(self.handle_quit)
 
         self.btn_balance.toggled.connect(self.handle_balance_toggle)
@@ -1644,6 +1682,59 @@ class CameraWindow(QWidget, DogLogicMixin):
 
     def _enable_pose_controls(self):
         self._sliders_ready = True
+
+    def _update_imu_web_status_label(self):
+        label = getattr(self, "imu_web_status_label", None)
+        if label is None:
+            return
+        state = str(getattr(self, "imu_viewer_status", "checking") or "checking")
+        if state == "live":
+            label.setText("IMU Web: live")
+            label.setStyleSheet("color:#5eea98; font-size:11px; padding-top:2px;")
+            return
+        if state == "offline":
+            err = str(getattr(self, "imu_viewer_last_err", "") or "").strip()
+            suffix = f" ({err})" if err else ""
+            label.setText(f"IMU Web: offline{suffix}")
+            label.setStyleSheet("color:#ff8a8a; font-size:11px; padding-top:2px;")
+            return
+        label.setText("IMU Web: checking...")
+        label.setStyleSheet("color:#9fb0c3; font-size:11px; padding-top:2px;")
+
+    def _probe_imu_viewer_health(self):
+        raw = str(getattr(self, "imu_viewer_diag_url", "") or "").strip()
+        self.imu_viewer_status = "checking"
+        if not raw:
+            self.imu_viewer_status = "offline"
+            self.imu_viewer_reachable = False
+            self.imu_viewer_last_err = "diag-url-empty"
+            self._update_imu_web_status_label()
+            return
+        try:
+            parsed = urlparse(raw)
+            host = parsed.hostname
+            port = int(parsed.port or (443 if parsed.scheme == "https" else 80))
+            if not host:
+                raise ValueError("bad-url")
+            with socket.create_connection((host, port), timeout=0.4):
+                pass
+            self.imu_viewer_status = "live"
+            self.imu_viewer_reachable = True
+            self.imu_viewer_last_ok_ts = time.time()
+            self.imu_viewer_last_err = ""
+        except Exception as e:
+            self.imu_viewer_status = "offline"
+            self.imu_viewer_reachable = False
+            self.imu_viewer_last_err = str(e)
+        self._update_imu_web_status_label()
+
+    def handle_open_imu_viewer(self):
+        url = str(getattr(self, "imu_viewer_url", "") or "").strip()
+        if not url:
+            return
+        ok = QDesktopServices.openUrl(QUrl(url))
+        if not ok:
+            print(f"[IMU_VIEWER] Failed to open URL: {url}")
 
     def _apply_toggle_style(self, btn: QPushButton, active: bool, *, on_color: str, off_color: str):
         bg = on_color if active else off_color
@@ -1784,13 +1875,12 @@ class CameraWindow(QWidget, DogLogicMixin):
     def keyPressEvent(self, event):
         """
         Keyboard:
-          WASD+QE → motion std (W=fwd, S=back, A=turnL, D=turnR, Q=strafeL, E=strafeR)
+          W/E/R/S/D/F/C → motion legacy (W=turnL, E=fwd, R=turnR, S=left, D=relax, F=right, C=back)
           Space → stop (CMD_MOVE_STOP)
           B → beep
           L → LED
           K → calib
           P → play
-          Q → quit (if Ctrl+Q, but here Q is motion strafe! Need to resolve conflict)
           T → toggle ball tracking (same as Ball button)
         """
         # Space sometimes comes through as a keycode with blank text on some platforms,
@@ -1804,13 +1894,7 @@ class CameraWindow(QWidget, DogLogicMixin):
             return
         key = text.lower()
 
-        # Resolve Q conflict: check modifiers or just use Q for motion?
-        # Standard Main.py used Q for strafe and did not have 'Q' for quit (it was Esc or close button).
-        # send_motion_command handles 'q'.
-        # handle_quit is mapped to Key_Q in some contexts?
-        # Let's map 'q' to motion. If user wants to quit, they can use window close or Cmd+Q.
-
-        if key in ("w", "a", "s", "d", "q", "e"):
+        if key in ("w", "e", "r", "s", "d", "f", "c"):
             self.send_motion_command(key)
         elif key == "b":
             self.handle_beep_key()

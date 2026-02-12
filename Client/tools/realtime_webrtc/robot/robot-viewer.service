@@ -1,0 +1,20 @@
+# Version: 2026.02.09-3
+# Revision History:
+#   2026-02-09 - Switch to custom static server with explicit cache-control and /health endpoint for Phase-5 observability.
+#   2026-02-09 - Serve web assets from Server/web for Pi-hosted ownership clarity.
+#   2026-02-09 - Initial static viewer service template (serves webrtc_view.html on port 8080).
+[Unit]
+Description=RobotDog Viewer Static Server
+After=network-online.target robot-sfu.service
+Wants=network-online.target robot-sfu.service
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Server/web
+ExecStart=/usr/bin/python3 /home/pi/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Server/web/static_viewer_server.py --listen 0.0.0.0 --port 8080 --directory /home/pi/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Server/web
+Restart=always
+RestartSec=1
+
+[Install]
+WantedBy=multi-user.target

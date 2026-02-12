@@ -1,9 +1,10 @@
 # AGENTS.md
 
 ## Version
-v1.2 (2026-02-09 14:03 local time)
+v1.3 (2026-02-09 15:02 local time)
 
 ## Revision History
+- 2026-02-09 15:02 v1.3  Added mandatory README update rule for impacted Client/Server changes, including Pi-side sync/verification for `Server/README.md`.
 - 2026-02-09 14:03 v1.2  Added explicit Pi `Server/` source-of-truth policy and mandatory sync/verification rule before finalizing `Server/` tasks.
 - 2026-02-08 15:01 v1.1  Added explicit local-time capture + timestamp sync/hook enforcement steps.
 - 2026-02-08 11:24 v1.0  Initial persistent working rules.
@@ -44,3 +45,8 @@ v1.2 (2026-02-09 14:03 local time)
   - sync changed `Server/` content to Pi,
   - verify on Pi that updated header/version lines are present.
 - Do not report `Server/` task complete until Pi-side verification is done.
+
+8. README impact update policy.
+- If a change impacts client behavior/workflow/configuration, update `Client/README.md` in the same task.
+- If a change impacts server behavior/workflow/configuration, update `Server/README.md` in the same task.
+- For server-impacting changes, do not finalize until Pi-side `Server/README.md` is synced and verified.

@@ -10,6 +10,9 @@
      Server check + reconnect controller extracted from mtDogMain.py / ui_event_handlers.py.
      Owns background server check thread and Dog/Mac reconnect flow.
 
+ v1.02  (2026-02-08 12:06)    : Allow SFU reconnect with control-first readiness
+     • In SFU backend, reconnect no longer hard-blocks on pre-probe video readiness.
+     • Dog mode can start with healthy IP/control; RTSP read loop handles stream warm-up.
  v1.01  (2026-02-07 20:42)    : Integrate selected video backend probe/init
      • Reconnect now validates selected video path (SFU RTSP or legacy socket).
      • Close/init pluggable video source during Dog↔Mac mode switch.
@@ -94,7 +97,10 @@ class ServerReconnectController:
         host.server_control_ok = ctrl_ok
         host.server_video_ok = video_ok
 
-        if not (ip_ok and ctrl_ok and video_ok):
+        backend = str(getattr(host, "video_backend", "legacy_socket") or "legacy_socket").strip().lower()
+        must_have_video = backend != "sfu_rtsp"
+
+        if not (ip_ok and ctrl_ok and (video_ok or not must_have_video)):
             host.update_status_ui()
             host.reconnect_in_progress = False
             return

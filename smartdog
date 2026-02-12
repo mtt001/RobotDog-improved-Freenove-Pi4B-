@@ -1,6 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# Version:
+#   2026.02.11-02
+# Revision History:
+#   2026-02-11 16:57 - Updated IMU viewer launcher example to `color_viewer_server.py` after runtime rename.
+#   2026-02-09 00:00 - Initial launcher script for Freenove client virtual environment.
+#
 # Freenove Client launcher:
 # - No args: open an interactive shell with venv activated in Client directory.
 # - With args: run the command inside activated venv in Client directory.
@@ -39,7 +45,7 @@ echo "✓ Working directory: $(pwd)"
 echo ""
 echo "Examples:"
 echo "  • python mtDogMain.py"
-echo "  • python tools/imu_viewer/Demo_IMU_server.py"
+echo "  • python tools/imu_viewer/color_viewer_server.py"
 echo "  • deactivate"
 echo ""
 

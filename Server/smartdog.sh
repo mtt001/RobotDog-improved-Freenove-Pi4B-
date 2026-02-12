@@ -3,7 +3,7 @@
 # Freenove Robot Dog (Server side)
 # smartdog.sh - systemd-first supervisor wrapper + housekeeping
 # Location  : /home/pi/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Server/
-# Version   : v2.53 – 2026-02-08 10:57
+# Version   : v2.58 - 2026-02-09 15:24
 # Author    : pi (admin) + Codex
 # Notes     :
 #   - Always prefer smartdog.service as the single process owner.
@@ -14,6 +14,11 @@
 #       * restart service and verify ports 5001/8001
 # ---------------------------------------------------------------------
 # Revision History (key entries):
+# v2.58 (2026-02-09 15:24) : improve local-SFU status reporting and treat SFU API 401 as reachable-but-authenticated.
+# v2.57 (2026-02-09 15:15) : add Pi-hosted SFU/viewer service checks + startup supervision + Phase-1 endpoint status.
+# v2.56 (2026-02-08 16:29) : add known-IP alias map for clearer device identification in status tables.
+# v2.55 (2026-02-08 16:27) : enrich status output with peer device hints + SFU pipeline details + SFU client visibility block.
+# v2.54 (2026-02-08 12:53) : supervise optional RTSP publisher service for SFU stream recovery.
 # v2.53 (2026-02-08 10:57) : enforce date+time version format and sync to Pi server.
 # v2.52 (2026-02-08 10:56) : header version format now includes date + time.
 # v2.51 (2026-02-08) : restart recovery retry loop + post-restart validation
@@ -33,7 +38,10 @@ PID_FILE="$DOG_ROOT/smartdog.pid"
 PORT_CTRL=5001
 PORT_VIDEO=8001
 SERVICE_NAME="smartdog.service"
-VERSION="v2.53 – 2026-02-08 10:57"
+PUBLISHER_SERVICE_NAME="robot-publisher.service"
+SFU_SERVICE_NAME="robot-sfu.service"
+VIEWER_SERVICE_NAME="robot-viewer.service"
+VERSION="v2.58 - 2026-02-09 15:24"
 RESTART_MAX_RETRIES=3
 
 # Always change to Server directory
@@ -61,6 +69,93 @@ service_active() {
 
 service_enabled() {
   systemctl is-enabled --quiet "$SERVICE_NAME"
+}
+
+publisher_service_exists() {
+  systemctl list-unit-files --type=service 2>/dev/null | awk '{print $1}' | grep -Fxq "$PUBLISHER_SERVICE_NAME"
+}
+
+publisher_service_active() {
+  systemctl is-active --quiet "$PUBLISHER_SERVICE_NAME"
+}
+
+publisher_service_enabled() {
+  systemctl is-enabled --quiet "$PUBLISHER_SERVICE_NAME"
+}
+
+sfu_service_exists() {
+  systemctl list-unit-files --type=service 2>/dev/null | awk '{print $1}' | grep -Fxq "$SFU_SERVICE_NAME"
+}
+
+sfu_service_active() {
+  systemctl is-active --quiet "$SFU_SERVICE_NAME"
+}
+
+sfu_service_enabled() {
+  systemctl is-enabled --quiet "$SFU_SERVICE_NAME"
+}
+
+viewer_service_exists() {
+  systemctl list-unit-files --type=service 2>/dev/null | awk '{print $1}' | grep -Fxq "$VIEWER_SERVICE_NAME"
+}
+
+viewer_service_active() {
+  systemctl is-active --quiet "$VIEWER_SERVICE_NAME"
+}
+
+viewer_service_enabled() {
+  systemctl is-enabled --quiet "$VIEWER_SERVICE_NAME"
+}
+
+ensure_publisher_service() {
+  if ! publisher_service_exists; then
+    echo -e "${C_YELLOW}Publisher service $PUBLISHER_SERVICE_NAME not installed (SFU RTSP auto-recovery disabled).${C_RESET}"
+    return 0
+  fi
+  if ! publisher_service_enabled; then
+    echo "Enabling $PUBLISHER_SERVICE_NAME ..."
+    sudo systemctl enable "$PUBLISHER_SERVICE_NAME" >/dev/null 2>&1 || true
+  fi
+  if publisher_service_active; then
+    echo -e "${C_GREEN}$PUBLISHER_SERVICE_NAME already active.${C_RESET}"
+  else
+    echo "Starting $PUBLISHER_SERVICE_NAME ..."
+    sudo systemctl start "$PUBLISHER_SERVICE_NAME" || true
+  fi
+}
+
+ensure_sfu_service() {
+  if ! sfu_service_exists; then
+    echo -e "${C_YELLOW}SFU service $SFU_SERVICE_NAME not installed.${C_RESET}"
+    return 0
+  fi
+  if ! sfu_service_enabled; then
+    echo "Enabling $SFU_SERVICE_NAME ..."
+    sudo systemctl enable "$SFU_SERVICE_NAME" >/dev/null 2>&1 || true
+  fi
+  if sfu_service_active; then
+    echo -e "${C_GREEN}$SFU_SERVICE_NAME already active.${C_RESET}"
+  else
+    echo "Starting $SFU_SERVICE_NAME ..."
+    sudo systemctl start "$SFU_SERVICE_NAME" || true
+  fi
+}
+
+ensure_viewer_service() {
+  if ! viewer_service_exists; then
+    echo -e "${C_YELLOW}Viewer service $VIEWER_SERVICE_NAME not installed.${C_RESET}"
+    return 0
+  fi
+  if ! viewer_service_enabled; then
+    echo "Enabling $VIEWER_SERVICE_NAME ..."
+    sudo systemctl enable "$VIEWER_SERVICE_NAME" >/dev/null 2>&1 || true
+  fi
+  if viewer_service_active; then
+    echo -e "${C_GREEN}$VIEWER_SERVICE_NAME already active.${C_RESET}"
+  else
+    echo "Starting $VIEWER_SERVICE_NAME ..."
+    sudo systemctl start "$VIEWER_SERVICE_NAME" || true
+  fi
 }
 
 main_pids() {
@@ -123,6 +218,9 @@ restart_with_recovery() {
     sudo systemctl restart "$SERVICE_NAME"
 
     if wait_ports_ready 12; then
+      ensure_sfu_service
+      ensure_viewer_service
+      ensure_publisher_service
       echo -e "${C_GREEN}Restart complete; ports $PORT_CTRL/$PORT_VIDEO are ready.${C_RESET}"
       return 0
     fi
@@ -175,6 +273,9 @@ start() {
 
   kill_orphans
   cleanup_stale_files
+  ensure_sfu_service
+  ensure_viewer_service
+  ensure_publisher_service
 
   if wait_ports_ready 12; then
     echo -e "${C_GREEN}Started successfully via systemd; ports $PORT_CTRL/$PORT_VIDEO are ready.${C_RESET}"
@@ -214,6 +315,233 @@ port_active_or_established() {
   [ -n "$LISTEN_OUT" ] || [ -n "$EST_OUT" ]
 }
 
+get_publisher_env_var() {
+  local key="$1" envs
+  envs="$(systemctl show "$PUBLISHER_SERVICE_NAME" -p Environment --value 2>/dev/null || true)"
+  printf "%s\n" "$envs" | tr ' ' '\n' | sed -n "s/^${key}=//p" | head -n 1
+}
+
+get_sfu_host() {
+  local v
+  v="$(get_publisher_env_var "SFU_HOST")"
+  if [ -n "$v" ]; then
+    echo "$v"
+  else
+    echo "192.168.0.198"
+  fi
+}
+
+get_stream_path() {
+  local v
+  v="$(get_publisher_env_var "STREAM_PATH")"
+  if [ -n "$v" ]; then
+    echo "$v"
+  else
+    echo "robotdog"
+  fi
+}
+
+get_local_pi_ip() {
+  hostname -I 2>/dev/null | awk '{print $1}'
+}
+
+resolve_host_name() {
+  local ip="$1" h
+  h="$(getent hosts "$ip" 2>/dev/null | awk '{print $2; exit}' || true)"
+  if [ -z "$h" ] && command -v avahi-resolve-address >/dev/null 2>&1; then
+    h="$(avahi-resolve-address "$ip" 2>/dev/null | awk '{print $2; exit}' || true)"
+  fi
+  echo "${h:-n/a}"
+}
+
+mac_for_ip() {
+  local ip="$1" m
+  m="$(ip neigh show "$ip" 2>/dev/null | awk '{print $5; exit}' || true)"
+  if [ -z "$m" ] && command -v arp >/dev/null 2>&1; then
+    m="$(arp -n "$ip" 2>/dev/null | awk '/ether/ {print $3; exit}' || true)"
+  fi
+  echo "${m:-n/a}"
+}
+
+device_hint_for_peer() {
+  local ip="$1" host="$2" sfu_host="$3" local_ip="$4" h_lc
+  h_lc="$(printf "%s" "$host" | tr '[:upper:]' '[:lower:]')"
+  if [ "$ip" = "127.0.0.1" ] || [ "$ip" = "::1" ]; then
+    echo "Local loopback"
+    return
+  fi
+  if [ -n "$local_ip" ] && [ "$ip" = "$local_ip" ]; then
+    echo "This Pi (local)"
+    return
+  fi
+  if [ "$ip" = "$sfu_host" ]; then
+    if [ -n "$local_ip" ] && [ "$sfu_host" = "$local_ip" ]; then
+      echo "This Pi (SFU host)"
+    else
+      echo "SFU host (remote)"
+    fi
+    return
+  fi
+  if printf "%s" "$h_lc" | grep -Eq 'iphone|ipad|ios'; then
+    echo "iOS device (likely Safari)"
+    return
+  fi
+  if printf "%s" "$h_lc" | grep -Eq 'mac|macbook|imac'; then
+    echo "Mac client"
+    return
+  fi
+  echo "LAN client (unclassified)"
+}
+
+known_peer_alias() {
+  # Edit this map with your stable LAN IPs for exact labels in `smartdog status`.
+  case "$1" in
+    192.168.0.198) echo "Mac mini (SFU host)" ;;
+    192.168.0.32)  echo "Raspberry Pi (server)" ;;
+    *)             echo "" ;;
+  esac
+}
+
+print_established_clients_detail() {
+  local port="$1" title="$2" sfu_host local_ip raw idx
+  sfu_host="$(get_sfu_host)"
+  local_ip="$(get_local_pi_ip)"
+  raw="$(sudo ss -tnp state established "sport = :$port" 2>/dev/null | sed -n '2,$p' || true)"
+  echo "==== Established Clients (${title}:${port}) ===="
+  if [ -z "$raw" ]; then
+    echo -e "${C_YELLOW}No active client.${C_RESET}"
+    echo
+    return
+  fi
+  printf "%-3s %-21s %-21s %-25s %-30s %-18s %s\n" "#" "Peer Address" "Hostname" "Alias" "Device Hint" "MAC" "Process"
+  idx=0
+  while IFS= read -r line; do
+    [ -z "$line" ] && continue
+    idx=$((idx+1))
+    local peer host mac hint proc alias
+    peer="$(printf "%s\n" "$line" | awk '{print $5}')"
+    host="$(resolve_host_name "${peer%%:*}")"
+    mac="$(mac_for_ip "${peer%%:*}")"
+    alias="$(known_peer_alias "${peer%%:*}")"
+    hint="$(device_hint_for_peer "${peer%%:*}" "$host" "$sfu_host" "$local_ip")"
+    proc="$(printf "%s\n" "$line" | sed -n 's/.*users:\((.*)\)$/\1/p')"
+    [ -n "$proc" ] || proc="n/a"
+    [ -n "$alias" ] || alias="n/a"
+    printf "%-3s %-21s %-21s %-25s %-30s %-18s %s\n" "$idx" "$peer" "$host" "$alias" "$hint" "$mac" "$proc"
+  done <<< "$raw"
+  echo
+}
+
+probe_rtsp_describe_status() {
+  local host="$1" path="$2"
+  python3 - "$host" "$path" <<'PY' 2>/dev/null
+import socket, sys
+host = sys.argv[1].strip()
+path = "/" + sys.argv[2].strip().lstrip("/")
+req = (f"DESCRIBE rtsp://{host}:8554{path} RTSP/1.0\r\n"
+       "CSeq: 1\r\n"
+       "Accept: application/sdp\r\n\r\n").encode()
+try:
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(2.0)
+    s.connect((host, 8554))
+    s.sendall(req)
+    head = (s.recv(2048).decode("utf-8", "ignore").splitlines() or ["<empty>"])[0]
+    print(head)
+except Exception as e:
+    print(f"RTSP_CHECK_FAIL: {e}")
+finally:
+    try:
+        s.close()
+    except Exception:
+        pass
+PY
+}
+
+probe_whep_options_status() {
+  local host="$1" path="$2"
+  curl -sS -m 3 -i -X OPTIONS "http://${host}:8889/${path}/whep" 2>/dev/null | head -n 1
+}
+
+probe_viewer_page_status() {
+  local host="$1"
+  curl -sS -m 3 -i "http://${host}:8080/webrtc_view.html" 2>/dev/null | head -n 1
+}
+
+probe_sfu_path_clients_api() {
+  local host="$1" path="$2"
+  python3 - "$host" "$path" <<'PY' 2>/dev/null
+import json, sys, urllib.request
+import urllib.error
+host = sys.argv[1].strip()
+path = sys.argv[2].strip().lstrip("/")
+url = f"http://{host}:9997/v3/paths/get/{path}"
+try:
+    with urllib.request.urlopen(url, timeout=2) as r:
+        data = json.load(r)
+    readers = data.get("readers")
+    if isinstance(readers, list):
+        rc = len(readers)
+    elif isinstance(readers, int):
+        rc = readers
+    else:
+        rc = "n/a"
+    source_ready = data.get("sourceReady")
+    tracks = data.get("tracks")
+    if isinstance(tracks, list):
+        tc = len(tracks)
+    else:
+        tc = "n/a"
+    print(f"API OK | sourceReady={source_ready} | readers={rc} | tracks={tc}")
+except urllib.error.HTTPError as e:
+    if e.code == 401:
+        print("API_AUTH_REQUIRED: HTTP 401")
+    else:
+        print(f"API_HTTP_ERROR: HTTP {e.code}")
+except Exception as e:
+    print(f"API_UNAVAILABLE: {e}")
+PY
+}
+
+print_sfu_streaming_status() {
+  local sfu_host stream_path rtsp_status whep_status viewer_status api_status uplink_count local_ip
+  sfu_host="$(get_sfu_host)"
+  stream_path="$(get_stream_path)"
+  local_ip="$(get_local_pi_ip)"
+
+  rtsp_status="$(probe_rtsp_describe_status "$sfu_host" "$stream_path")"
+  whep_status="$(probe_whep_options_status "$sfu_host" "$stream_path")"
+  viewer_status="$(probe_viewer_page_status "$sfu_host")"
+  api_status="$(probe_sfu_path_clients_api "$sfu_host" "$stream_path")"
+  uplink_count="$(sudo ss -tn state established "dport = :8554" 2>/dev/null | awk -v host="$sfu_host" '$5 ~ "^"host":" {c++} END{print c+0}')"
+
+  echo "==== SFU Streaming Detail ===="
+  echo "SFU host           : $sfu_host"
+  echo "Stream path        : $stream_path"
+  if [ -n "$local_ip" ] && [ "$sfu_host" = "$local_ip" ]; then
+    if publisher_service_active; then
+      echo -e "Pi->SFU RTSP uplink: ${C_GREEN}local-host mode${C_RESET} (publisher service active)"
+    else
+      echo -e "Pi->SFU RTSP uplink: ${C_RED}local-host mode but publisher inactive${C_RESET}"
+    fi
+  elif [ "$uplink_count" -gt 0 ]; then
+    echo -e "Pi->SFU RTSP uplink: ${C_GREEN}active${C_RESET} (connections: $uplink_count)"
+  else
+    echo -e "Pi->SFU RTSP uplink: ${C_YELLOW}not established${C_RESET}"
+  fi
+  echo "RTSP check (8554)  : ${rtsp_status:-n/a}"
+  echo "WHEP check (8889)  : ${whep_status:-n/a}"
+  echo "Viewer page (8080) : ${viewer_status:-n/a}"
+  echo "Transport model    : Pi publish=RTSP(TCP) -> SFU relay; SFU readers=RTSP(TCP/UDP) or WebRTC(SRTP/UDP preferred)"
+  echo "Client roles       : Mac mtDogMain reads RTSP path; iOS Safari reads WebRTC/WHEP path"
+  echo
+
+  echo "==== SFU Stream Clients (path:${stream_path}) ===="
+  echo "SFU API (9997)     : ${api_status:-n/a}"
+  echo "Note               : API_AUTH_REQUIRED means endpoint is reachable but credentials are required."
+  echo
+}
+
 status() {
   print_banner
 
@@ -238,6 +566,36 @@ status() {
   fi
   echo
 
+  echo "==== SFU Publisher Service ===="
+  if publisher_service_exists; then
+    echo -n "$PUBLISHER_SERVICE_NAME enabled: "
+    if publisher_service_enabled; then echo -e "${C_GREEN}yes${C_RESET}"; else echo -e "${C_YELLOW}no${C_RESET}"; fi
+    echo -n "$PUBLISHER_SERVICE_NAME active : "
+    if publisher_service_active; then echo -e "${C_GREEN}yes${C_RESET}"; else echo -e "${C_RED}no${C_RESET}"; fi
+  else
+    echo -e "${C_YELLOW}$PUBLISHER_SERVICE_NAME not installed.${C_RESET}"
+  fi
+  echo
+
+  echo "==== SFU / Viewer Host Services ===="
+  if sfu_service_exists; then
+    echo -n "$SFU_SERVICE_NAME enabled: "
+    if sfu_service_enabled; then echo -e "${C_GREEN}yes${C_RESET}"; else echo -e "${C_YELLOW}no${C_RESET}"; fi
+    echo -n "$SFU_SERVICE_NAME active : "
+    if sfu_service_active; then echo -e "${C_GREEN}yes${C_RESET}"; else echo -e "${C_RED}no${C_RESET}"; fi
+  else
+    echo -e "${C_YELLOW}$SFU_SERVICE_NAME not installed.${C_RESET}"
+  fi
+  if viewer_service_exists; then
+    echo -n "$VIEWER_SERVICE_NAME enabled: "
+    if viewer_service_enabled; then echo -e "${C_GREEN}yes${C_RESET}"; else echo -e "${C_YELLOW}no${C_RESET}"; fi
+    echo -n "$VIEWER_SERVICE_NAME active : "
+    if viewer_service_active; then echo -e "${C_GREEN}yes${C_RESET}"; else echo -e "${C_RED}no${C_RESET}"; fi
+  else
+    echo -e "${C_YELLOW}$VIEWER_SERVICE_NAME not installed.${C_RESET}"
+  fi
+  echo
+
   echo "==== Listening Ports ===="
   for P in "$PORT_CTRL" "$PORT_VIDEO"; do
     local NAME="Control"
@@ -250,21 +608,9 @@ status() {
   done
   echo
 
-  echo "==== Established Clients (control:$PORT_CTRL) ===="
-  if sudo ss -tn state established "sport = :$PORT_CTRL" 2>/dev/null | sed -n '2,$p' | grep -q .; then
-    sudo ss -tn state established "sport = :$PORT_CTRL"
-  else
-    echo -e "${C_YELLOW}No active client.${C_RESET}"
-  fi
-  echo
-
-  echo "==== Established Clients (video:$PORT_VIDEO) ===="
-  if sudo ss -tn state established "sport = :$PORT_VIDEO" 2>/dev/null | sed -n '2,$p' | grep -q .; then
-    sudo ss -tn state established "sport = :$PORT_VIDEO"
-  else
-    echo -e "${C_YELLOW}No active client.${C_RESET}"
-  fi
-  echo
+  print_established_clients_detail "$PORT_CTRL" "control"
+  print_established_clients_detail "$PORT_VIDEO" "video"
+  print_sfu_streaming_status
 
   print_battery_status
   echo
@@ -278,6 +624,7 @@ usage() {
   echo
   echo "Notes:"
   echo "  - start/stop/restart operate on $SERVICE_NAME"
+  echo "  - if installed, start/restart also ensures $SFU_SERVICE_NAME/$VIEWER_SERVICE_NAME/$PUBLISHER_SERVICE_NAME are active"
   echo "  - restart performs housekeeping, retries recovery, and verifies ports"
 }
 

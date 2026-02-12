@@ -1,9 +1,13 @@
 # IMU Viewer (WebRTC-First) Runbook
 
-README Version: `2026.02.07-15`  
-Last Updated: `2026-02-07 18:59:09 CST`
+README Version: `2026.02.11-16`  
+Last Updated: `2026-02-11 16:57 CST`
 
-This document is the operational guide for `Demo_IMU_server.py` and the Live View stack (Pi publisher + MediaMTX SFU + browser viewer).
+Revision History:
+- 2026-02-11 16:57 - Renamed runtime server entry from `Demo_IMU_server.py` to `color_viewer_server.py` and aligned runbook commands.
+- 2026-02-07 18:59 - Added WebRTC-first operations runbook and troubleshooting guidance.
+
+This document is the operational guide for `color_viewer_server.py` and the Live View stack (Pi publisher + MediaMTX SFU + browser viewer).
 
 ## Quick Usage (Start Here)
 
@@ -16,7 +20,7 @@ cd /Users/mengtatsai/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Client/tools/i
 What this does:
 - Starts SFU (`mediamtx`) on Mac (`192.168.0.198`)
 - Syncs and starts Pi publisher (`robotdog` path)
-- Starts proxy (`Demo_IMU_server.py`) in WebRTC-first mode
+- Starts proxy (`color_viewer_server.py`) in WebRTC-first mode
 - Opens browser at `http://127.0.0.1:8080/simple`
 
 ### B) Verify immediately
@@ -34,7 +38,7 @@ Expected key fields:
 
 ## What This Tool Does
 
-`Demo_IMU_server.py`:
+`color_viewer_server.py`:
 - Proxies IMU + telemetry commands to Pi control server (`5001`)
 - Serves web UI assets (`/`, `/simple`, `/color`, JS, assets)
 - Exposes stream status endpoint (`/video/status`)
@@ -43,7 +47,7 @@ Expected key fields:
 
 ## Current Default Runtime Configuration
 
-Source of truth: `Demo_IMU_server.py` `DEFAULT_*` constants.
+Source of truth: `color_viewer_server.py` `DEFAULT_*` constants.
 
 - Pi host: `192.168.0.32`
 - Pi control port: `5001`
@@ -88,7 +92,7 @@ ssh pi@192.168.0.32 'cd /home/pi/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Cl
 3. Start proxy
 ```bash
 cd /Users/mengtatsai/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Client/tools/imu_viewer
-python3 Demo_IMU_server.py
+python3 color_viewer_server.py
 ```
 
 ## Resolution and FPS Control
@@ -184,7 +188,7 @@ ssh pi@192.168.0.32 'tail -n 120 /tmp/pi_publish_webrtc.log'
 
 ## Files and Roles
 
-- `Demo_IMU_server.py`: HTTP proxy + IMU bridge + stream status API
+- `color_viewer_server.py`: HTTP proxy + IMU bridge + stream status API
 - `live_video.js`: browser-side stream selector (WebRTC/H264/MJPEG)
 - `start_live_view.sh`: one-command orchestrator
 - `../realtime_webrtc/sfu/mediamtx.yml`: SFU config

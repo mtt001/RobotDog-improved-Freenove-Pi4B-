@@ -12,6 +12,12 @@
        - Legacy Pi JPEG socket frames (dog_client.image)
        - SFU RTSP pull (OpenCV/FFmpeg) for low-latency H264
 
+ v1.02  (2026-02-08 12:31)    : Make SFU probe validate RTSP stream path (not just open port)
+     • Probe now performs RTSP DESCRIBE and requires `200 OK` for healthy video status.
+     • Prevent false-green video status when SFU host is reachable but stream path is missing (404).
+ v1.01  (2026-02-08 12:18)    : Throttle RTSP reconnect attempts to avoid terminal spam
+     • Add retry backoff/cooldown for failed SFU RTSP opens and read failures.
+     • Stop re-opening RTSP on every UI frame while endpoint is unavailable.
  v1.00  (2026-02-07)          : Initial extraction
      • Add backend-neutral interface and SFU RTSP source.
 ===============================================================================
@@ -20,6 +26,7 @@
 from __future__ import annotations
 
 import os
+import socket
 import time
 from dataclasses import dataclass
 from urllib.parse import urlparse
@@ -102,6 +109,9 @@ class SfuRtspSource(BaseVideoSource):
         self.last_err = ""
         self._last_ts = 0.0
         self._last_open_try_ts = 0.0
+        self._next_open_try_ts = 0.0
+        self._retry_delay_s = 0.5
+        self._retry_delay_max_s = 5.0
 
     def _set_ffmpeg_capture_opts(self):
         opts = f"rtsp_transport;{self.transport}|fflags;nobuffer|flags;low_delay|max_delay;0|stimeout;3000000"
@@ -138,6 +148,8 @@ class SfuRtspSource(BaseVideoSource):
             pass
         self.cap = cap
         self.last_err = ""
+        self._retry_delay_s = 0.5
+        self._next_open_try_ts = 0.0
         return True
 
     def close(self) -> None:
@@ -152,26 +164,63 @@ class SfuRtspSource(BaseVideoSource):
         return self.cap is not None and self.cap.isOpened()
 
     def probe(self, timeout_s: float = 1.0) -> bool:
-        # Fast probe: TCP reachability for host:port in RTSP URL.
+        # RTSP health probe: require DESCRIBE 200 OK for selected path.
         try:
             parsed = urlparse(self.rtsp_url)
             host = parsed.hostname
             port = int(parsed.port or 8554)
             if not host:
+                self.last_err = "invalid RTSP URL (missing host)"
                 return False
-            import socket
+            path = parsed.path or "/"
+            if parsed.query:
+                path = f"{path}?{parsed.query}"
+            req = (
+                f"DESCRIBE rtsp://{host}:{port}{path} RTSP/1.0\r\n"
+                "CSeq: 1\r\n"
+                "Accept: application/sdp\r\n"
+                "User-Agent: mtDogMain-rtsp-probe\r\n\r\n"
+            ).encode("utf-8", errors="ignore")
 
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(max(0.2, float(timeout_s)))
-            s.connect((host, port))
-            s.close()
-            return True
-        except Exception:
+            try:
+                s.settimeout(max(0.2, float(timeout_s)))
+                s.connect((host, port))
+                s.sendall(req)
+                raw = s.recv(2048)
+            finally:
+                try:
+                    s.close()
+                except Exception:
+                    pass
+
+            head = raw.decode("utf-8", errors="ignore").splitlines()[0] if raw else ""
+            # Typical: "RTSP/1.0 200 OK" or "RTSP/1.0 404 Not Found"
+            status = 0
+            try:
+                status = int(head.split(" ", 2)[1])
+            except Exception:
+                status = 0
+            if status == 200:
+                self.last_err = ""
+                return True
+            if status > 0:
+                self.last_err = f"RTSP DESCRIBE failed: {status}"
+            else:
+                self.last_err = "RTSP probe failed: invalid response"
+            return False
+        except Exception as e:
+            self.last_err = f"RTSP probe error: {e}"
             return False
 
     def read(self) -> VideoFrame:
+        now = time.time()
         if self.cap is None or not self.cap.isOpened():
+            if now < float(self._next_open_try_ts or 0.0):
+                return VideoFrame(frame=None, is_new=False, timestamp=self._last_ts, error=self.last_err or "RTSP reconnect pending")
             if not self.open():
+                self._next_open_try_ts = now + float(self._retry_delay_s)
+                self._retry_delay_s = min(float(self._retry_delay_max_s), float(self._retry_delay_s) * 1.8)
                 return VideoFrame(frame=None, is_new=False, timestamp=self._last_ts, error=self.last_err)
         try:
             ok, frame = self.cap.read()
@@ -186,6 +235,10 @@ class SfuRtspSource(BaseVideoSource):
             return VideoFrame(frame=frame, is_new=True, timestamp=ts, error="")
         # Read failed: one quick reopen attempt.
         self.close()
+        if now < float(self._next_open_try_ts or 0.0):
+            if not self.last_err:
+                self.last_err = "RTSP read failed"
+            return VideoFrame(frame=None, is_new=False, timestamp=self._last_ts, error=self.last_err)
         if self.open():
             try:
                 ok2, frame2 = self.cap.read()
@@ -197,7 +250,11 @@ class SfuRtspSource(BaseVideoSource):
                 ts = time.time()
                 self._last_ts = ts
                 self.last_err = ""
+                self._retry_delay_s = 0.5
+                self._next_open_try_ts = 0.0
                 return VideoFrame(frame=frame2, is_new=True, timestamp=ts, error="")
+        self._next_open_try_ts = time.time() + float(self._retry_delay_s)
+        self._retry_delay_s = min(float(self._retry_delay_max_s), float(self._retry_delay_s) * 1.8)
         if not self.last_err:
             self.last_err = "RTSP read failed"
         return VideoFrame(frame=None, is_new=False, timestamp=self._last_ts, error=self.last_err)
@@ -216,4 +273,3 @@ class VideoSourceController:
                 transport=str(getattr(host, "sfu_rtsp_transport", "tcp") or "tcp"),
             )
         return LegacyDogSocketSource(host)
-

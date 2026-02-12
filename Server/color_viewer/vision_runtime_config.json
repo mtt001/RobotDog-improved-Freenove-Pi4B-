@@ -1,0 +1,13 @@
+{
+  "auto_degrade": false,
+  "conf_threshold": 0.12,
+  "imgsz": 256,
+  "interval_n": 8,
+  "iou_threshold": 0.45,
+  "min_stream_fps": 20.0,
+  "target_height": 540,
+  "target_width": 960,
+  "tracking_enabled": false,
+  "yolo_enabled": true,
+  "yolo_model_path": "/home/pi/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Server/color_viewer/models/best_256_fp16.tflite,/home/pi/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Server/color_viewer/models/yolov8n_256_fp16.tflite"
+}

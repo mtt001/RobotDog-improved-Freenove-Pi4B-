@@ -10,6 +10,17 @@
      Frame update controller extracted from mtDogMain.py (CameraWindow).
      Handles per-frame capture, overlays, and detection/test-mode updates.
 
+ v1.09  (2026-02-08 12:31)    : Align on-frame video label with selected backend
+     • Top-left source line now shows `Video SFU/<path>` when SFU RTSP backend is active.
+     • Avoid misleading `Video 8001` label while running SFU mode.
+ v1.08  (2026-02-08 12:27)    : Friendlier no-video status and retry reminder
+     • Replace large red no-video banner with calm waiting hint on placeholder frame.
+     • Show retry countdown/reminder in bottom stream message pane for SFU failures.
+ v1.07  (2026-02-08 12:18)    : Show streaming diagnostics in bottom message pane
+     • Add non-overlay stream info block (backend/SFU/RTSP/IP/port/transport/error).
+     • Prepend stream diagnostics to `vision_msg_label` text each frame.
+ v1.06  (2026-02-08 12:18)    : Improve SFU no-video diagnostics on placeholder frame
+     • Show RTSP URL backend and last source error instead of legacy socket debug fields.
  v1.05  (2026-02-07 20:42)    : Add pluggable Dog video source path
      • Read Dog video from `host.video_source` when available (SFU RTSP backend).
      • Keep legacy `dog_client.image` path as fallback for compatibility.
@@ -28,6 +39,7 @@
 from __future__ import annotations
 
 import time
+from urllib.parse import urlparse
 
 import cv2
 import numpy as np
@@ -118,24 +130,27 @@ class FrameUpdateController:
                     frame = host.last_dog_frame
                 else:
                     frame = np.zeros((480, 640, 3), dtype=np.uint8)
+                    # Friendly placeholder (avoid aggressive red failure text).
+                    status = "Waiting for Dog video stream..."
+                    hint = "Control/telemetry still active. See bottom message panel for details."
+                    dots = "." * int((time.time() * 1.5) % 4)
+                    status = status.rstrip(".") + dots
                     cv2.putText(
                         frame,
-                        "NO DOG VIDEO",
+                        status,
                         (40, 120),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.8,
-                        (0, 0, 255),
+                        (185, 205, 220),
                         2,
                     )
-                    # Debug info: show video source status
-                    debug_text = f"IP:{host.ip}:{host.video_port} | Socket2:{getattr(host.dog_client, 'client_socket2', None) is not None}"
                     cv2.putText(
                         frame,
-                        debug_text,
-                        (40, 180),
+                        hint,
+                        (40, 152),
                         cv2.FONT_HERSHEY_SIMPLEX,
                         0.5,
-                        (0, 255, 255),
+                        (145, 165, 180),
                         1,
                     )
                 if host.dog_last_frame_time is not None:
@@ -756,9 +771,14 @@ class FrameUpdateController:
             ip_color,
             thickness,
         )
+        backend = str(getattr(host, "video_backend", "legacy_socket") or "legacy_socket").strip().lower()
+        if backend == "sfu_rtsp":
+            video_label = f"Video SFU/{getattr(host, 'sfu_stream_path', 'robotdog')}"
+        else:
+            video_label = f"Video {host.video_port}"
         cv2.putText(
             frame_rgb,
-            f"Video {host.video_port}, Ctrl {host.control_port}",
+            f"{video_label}, Ctrl {host.control_port}",
             (10, 35),
             font,
             scale,
@@ -844,7 +864,9 @@ class FrameUpdateController:
         try:
             label = getattr(host, "vision_msg_label", None)
             if label is not None:
-                txt = str(getattr(host, "_vision_status_text", "") or "")
+                vision_txt = str(getattr(host, "_vision_status_text", "") or "")
+                stream_txt = self._build_stream_info_html()
+                txt = stream_txt if not vision_txt else f"{stream_txt}<br>{vision_txt}"
                 label.setText(txt)
         except Exception:
             pass
@@ -855,3 +877,77 @@ class FrameUpdateController:
                 imu_label.setText(imu_txt)
         except Exception:
             pass
+
+    def _build_stream_info_html(self) -> str:
+        host = self._host
+        backend = str(getattr(host, "video_backend", "legacy_socket") or "legacy_socket").strip().lower()
+        if backend == "sfu_rtsp":
+            rtsp_url = str(getattr(host, "sfu_rtsp_url", "") or "")
+            transport = str(getattr(host, "sfu_rtsp_transport", "tcp") or "tcp")
+            stream_path = str(getattr(host, "sfu_stream_path", "robotdog") or "robotdog")
+            src = getattr(host, "video_source", None)
+            src_ready = bool(src is not None and getattr(src, "is_ready", lambda: False)())
+            last_err = str(getattr(host, "video_source_last_error", "") or "")
+            retry_in_s = 0.0
+            try:
+                retry_at = float(getattr(src, "_next_open_try_ts", 0.0) or 0.0)
+                retry_in_s = max(0.0, retry_at - time.time())
+            except Exception:
+                retry_in_s = 0.0
+            try:
+                parsed = urlparse(rtsp_url)
+                sfu_host = parsed.hostname or "?"
+                sfu_port = int(parsed.port or 8554)
+                rtsp_path = parsed.path.lstrip("/") or stream_path
+            except Exception:
+                sfu_host = "?"
+                sfu_port = 8554
+                rtsp_path = stream_path
+
+            head = (
+                "<div style='color:#7fd4ff; font-weight:600;'>"
+                f"Stream: SFU RTSP | backend={backend} | ready={'YES' if src_ready else 'NO'}"
+                "</div>"
+            )
+            line2 = (
+                "<div style='color:#b9c7d6;'>"
+                f"SFU {sfu_host}:{sfu_port} | path={rtsp_path} | transport={transport}"
+                "</div>"
+            )
+            line3 = (
+                "<div style='color:#98a8ba;'>"
+                f"RTSP URL: {rtsp_url}"
+                "</div>"
+            )
+            if last_err:
+                line4 = (
+                    "<div style='color:#ff8a80;'>"
+                    f"Video Error: {last_err}"
+                    "</div>"
+                )
+            else:
+                line4 = "<div style='color:#76d275;'>Video Error: --</div>"
+            if src_ready:
+                line5 = "<div style='color:#76d275;'>Status: stream online.</div>"
+            elif retry_in_s > 0.0:
+                line5 = (
+                    "<div style='color:#ffd166;'>"
+                    f"Status: stream offline, auto-retry in {retry_in_s:.1f}s. "
+                    "Control/IMU still active."
+                    "</div>"
+                )
+            else:
+                line5 = (
+                    "<div style='color:#ffd166;'>"
+                    "Status: stream offline, retrying... Control/IMU still active."
+                    "</div>"
+                )
+            return "<br>".join([head, line2, line3, line4, line5])
+
+        # Legacy socket stream path
+        video_port = int(getattr(host, "video_port", 8001) or 8001)
+        ip = str(getattr(host, "ip", "") or "")
+        return (
+            "<div style='color:#7fd4ff; font-weight:600;'>Stream: Legacy Socket</div>"
+            f"<div style='color:#b9c7d6;'>Pi Video: {ip}:{video_port} | Ctrl: {getattr(host, 'control_port', 5001)}</div>"
+        )

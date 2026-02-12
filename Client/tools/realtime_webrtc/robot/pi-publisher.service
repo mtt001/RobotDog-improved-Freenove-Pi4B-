@@ -1,20 +1,25 @@
-# Version: 2026.02.07-1
+# Version: 2026.02.09-2
+# Revision History:
+#   2026-02-09 - Add startup ordering dependency on robot-sfu.service for cleaner Phase-5 boot sequence.
+#   2026-02-09 - Switch default SFU host to Pi for Phase-1 always-on deployment.
+#   2026-02-08 - Default to RTSP publish mode for robust SFU recovery after Pi reboot.
+#   2026-02-07 - Initial service template.
 [Unit]
 Description=RobotDog WebRTC Publisher
-After=network-online.target
-Wants=network-online.target
+After=network-online.target robot-sfu.service
+Wants=network-online.target robot-sfu.service
 
 [Service]
 Type=simple
 User=pi
 WorkingDirectory=/home/pi/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Client/tools/realtime_webrtc/robot
-Environment=SFU_HOST=192.168.0.198
+Environment=SFU_HOST=192.168.0.32
 Environment=STREAM_PATH=robotdog
 Environment=WIDTH=960
 Environment=HEIGHT=540
 Environment=FPS=30
 Environment=BITRATE=2000000
-Environment=PUBLISH_MODE=whip
+Environment=PUBLISH_MODE=rtsp
 ExecStart=/bin/bash /home/pi/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Client/tools/realtime_webrtc/robot/pi_publish_webrtc.sh
 Restart=always
 RestartSec=1

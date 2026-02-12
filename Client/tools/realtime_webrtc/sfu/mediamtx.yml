@@ -1,8 +1,11 @@
 # MediaMTX config for low-latency fanout
-# Version: 2026.02.07-1
+# Version: 2026.02.09-1
 # Notes:
 # - relay only (no transcoding)
 # - WebRTC enabled for browser compatibility
+# Revision History:
+#   2026-02-09 - Set Pi-hosted defaults for Phase-1 (ICE host includes 192.168.0.32).
+#   2026-02-07 - Initial relay-only low-latency SFU config.
 
 logLevel: info
 
@@ -10,13 +13,20 @@ rtspAddress: :8554
 webrtc: yes
 webrtcAddress: :8889
 webrtcEncryption: no
+api: yes
+
+# Disable unused listeners to reduce port conflicts on Pi.
+rtmp: no
+hls: no
+srt: no
 
 # Use UDP-first for low latency
-protocols: [udp, tcp]
+rtspTransports: [udp, tcp]
 
 # ICE candidates for LAN; add public/STUN/TURN as needed for WAN
 webrtcAdditionalHosts:
-  - 192.168.0.198
+  - 192.168.0.32
+  - 127.0.0.1
 
 # Keep buffers short for control responsiveness
 writeQueueSize: 1024

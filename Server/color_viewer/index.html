@@ -1,0 +1,173 @@
+<!doctype html>
+<!--
+IMU Viewer Landing Page
+Description:
+  Entry page with mode selection and proxy diagnostics.
+Version:
+  2026.02.07-2
+Revision History:
+  2026-02-07 13:39 - Added live telemetry polling for power/range.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>IMU Dog Viewer</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --bg: #0e1116;
+        --fg: #e6e6e6;
+        --muted: #9aa3ad;
+        --accent: #42b3ff;
+      }
+      html, body {
+        margin: 0;
+        height: 100%;
+        background: var(--bg);
+        color: var(--fg);
+        font-family: "Avenir Next", "Helvetica Neue", Arial, sans-serif;
+      }
+      #hud {
+        position: fixed;
+        left: 16px;
+        top: 16px;
+        padding: 10px 12px;
+        background: rgba(0, 0, 0, 0.5);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 8px;
+        font-size: 13px;
+        line-height: 1.4;
+        z-index: 10;
+        min-width: 240px;
+      }
+      #hud .label {
+        color: var(--muted);
+      }
+      #status {
+        color: var(--accent);
+        font-weight: 600;
+      }
+      canvas {
+        display: block;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="hud">
+      <div><span class="label">Mode:</span> Select a view</div>
+      <div><span class="label">Power:</span> <span id="power">--</span></div>
+      <div><span class="label">Range:</span> <span id="range">--</span></div>
+      <div style="margin-top:6px;">
+        <a href="/simple" style="color:var(--accent); text-decoration:none;">Simple (box) model</a>
+      </div>
+      <div style="margin-top:6px;">
+        <a href="/color" style="color:var(--accent); text-decoration:none;">Color (pug) model</a>
+      </div>
+      <div style="margin-top:8px;"><span class="label">Diag:</span> <span id="diag">--</span></div>
+      <div><span class="label">Error:</span> <span id="err">--</span></div>
+      <div><span class="label">Proxy:</span> <span id="version">--</span></div>
+      <div><span class="label">Proxy Time:</span> <span id="versiontime">--</span></div>
+    </div>
+    <script>
+      (() => {
+        const state = { failures: 0, lastPopupMs: 0 };
+        const FAILURE_THRESHOLD = 10; // ~1s at 100ms polling
+        const POPUP_COOLDOWN_MS = 30000;
+        const diagEl = document.getElementById('diag');
+        const errEl = document.getElementById('err');
+        const versionEl = document.getElementById('version');
+        const versionTimeEl = document.getElementById('versiontime');
+        const powerEl = document.getElementById('power');
+        const rangeEl = document.getElementById('range');
+
+        function maybeShowOfflinePopup(reason) {
+          const now = Date.now();
+          if (state.failures < FAILURE_THRESHOLD) return;
+          if (now - state.lastPopupMs < POPUP_COOLDOWN_MS) return;
+          state.lastPopupMs = now;
+          const message =
+            `Pi Server not reachable (${reason}).\n\n` +
+            `Try these steps:\n` +
+            `1) Ensure the Pi is powered on and connected to the same network.\n` +
+            `2) Confirm the Pi IP/port in the IMU proxy (use --pi-host / --pi-port).\n` +
+            `3) Start the Pi server program (smartdog.sh or main.py).\n` +
+            `4) Check firewall/router settings, then try again.`;
+          alert(message);
+        }
+
+        async function pollImu() {
+          try {
+            const res = await fetch('/imu', { cache: 'no-store' });
+            const data = await res.json();
+            if (data.ok) {
+              state.failures = 0;
+            } else {
+              state.failures += 1;
+              maybeShowOfflinePopup('no IMU data');
+            }
+          } catch (e) {
+            state.failures += 1;
+            maybeShowOfflinePopup('network error');
+          }
+        }
+
+        async function pollDiag() {
+          try {
+            const res = await fetch('/diag', { cache: 'no-store' });
+            const data = await res.json();
+            const host = data?.pi_host ? `${data.pi_host}:${data.pi_port}` : '--';
+            const ok = data?.last_ok_ts ? 'ok' : 'no link';
+            diagEl.textContent = `${ok} @ ${host}`;
+            errEl.textContent = data?.last_err ? data.last_err : '--';
+          } catch (e) {
+            diagEl.textContent = 'diag error';
+            errEl.textContent = 'cannot reach proxy';
+          }
+        }
+
+        async function pollVersion() {
+          try {
+            const res = await fetch('/version', { cache: 'no-store' });
+            const data = await res.json();
+            versionEl.textContent = data?.version || '--';
+            versionTimeEl.textContent = data?.ts ? new Date(data.ts * 1000).toLocaleString() : '--';
+          } catch (e) {
+            versionEl.textContent = 'version error';
+            versionTimeEl.textContent = '--';
+          }
+        }
+
+        function updateTelemetryOverlay(data) {
+          const battery = typeof data?.battery_v === 'number' ? data.battery_v : null;
+          const distance = typeof data?.distance_cm === 'number' ? data.distance_cm : null;
+          const powerText = battery !== null ? `${battery.toFixed(2)}V` : '--';
+          const rangeText = distance !== null ? `${distance.toFixed(2)}cm` : '--';
+
+          if (powerEl) {
+            powerEl.textContent = powerText;
+          }
+          if (rangeEl) {
+            rangeEl.textContent = rangeText;
+          }
+        }
+
+        async function pollTelemetry() {
+          try {
+            const res = await fetch('/telemetry', { cache: 'no-store' });
+            const data = await res.json();
+            updateTelemetryOverlay(data);
+          } catch (e) {
+            updateTelemetryOverlay(null);
+          }
+        }
+
+        setInterval(pollImu, 100);
+        setInterval(pollDiag, 1000);
+        setInterval(pollTelemetry, 1000);
+        pollVersion();
+        pollTelemetry();
+      })();
+    </script>
+  </body>
+</html>

@@ -1,3 +1,10 @@
+/*
+ * Three.js MTLLoader (local module path fix)
+ * Version: 2026.02.10-1
+ * Revision History:
+ *   2026-02-10 16:34 - Use local three.module.js path for browser module loading.
+ */
+
 import {
 	Color,
 	DefaultLoadingManager,
@@ -10,7 +17,7 @@ import {
 	TextureLoader,
 	Vector2,
 	SRGBColorSpace
-} from 'three';
+} from './three.module.js';
 
 /**
  * Loads a Wavefront .mtl file specifying materials
