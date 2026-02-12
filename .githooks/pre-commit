@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Guard README local-time drift.
+# Targets:
+#   - Client/README.md
+#   - Server/README.md
+# Fails commit when the "## Version" timestamp is older/newer than 60 minutes.
+
+MAX_DRIFT_MIN=60
+
+staged="$(git diff --cached --name-only --diff-filter=ACM || true)"
+if [[ -x /usr/bin/git ]]; then
+  GIT_BIN="/usr/bin/git"
+else
+  GIT_BIN="$(command -v git)"
+fi
+
+staged="$("${GIT_BIN}" diff --cached --name-only --diff-filter=ACM || true)"
+[[ -n "${staged}" ]] || exit 0
+
+check_file() {
+  local f="$1"
+  [[ -f "$f" ]] || return 0
+
+  local line ts
+  line="$(grep -E '^v[0-9]+\.[0-9]+\.[0-9]+ \([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2} local time\)$' "$f" | head -n 1 || true)"
+  if [[ -z "${line}" ]]; then
+    echo "pre-commit: missing/invalid version line in $f" >&2
+    echo "expected format: vX.Y.Z (YYYY-MM-DD HH:MM local time)" >&2
+    return 1
+  fi
+
+  ts="$(echo "$line" | sed -E 's/^v[0-9]+\.[0-9]+\.[0-9]+ \(([0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}) local time\)$/\1/')"
+  python3 - "$f" "$ts" "$MAX_DRIFT_MIN" <<'PY'
+import sys
+from datetime import datetime
+
+f, ts, max_drift = sys.argv[1], sys.argv[2], int(sys.argv[3])
+try:
+    t = datetime.strptime(ts, "%Y-%m-%d %H:%M")
+except Exception:
+    print(f"pre-commit: cannot parse timestamp in {f}: {ts}", file=sys.stderr)
+    sys.exit(1)
+
+now = datetime.now()
+drift_min = abs((now - t).total_seconds()) / 60.0
+if drift_min > max_drift:
+    print(
+        f"pre-commit: stale/local-time drift in {f}: {drift_min:.1f} min "
+        f"(max {max_drift} min).",
+        file=sys.stderr,
+    )
+    print(
+        "run: ./tools/version_time_sync.sh Client/README.md Server/README.md",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+PY
+}
+
+rc=0
+while IFS= read -r f; do
+  case "$f" in
+    Client/README.md|Server/README.md)
+      check_file "$f" || rc=1
+      ;;
+  esac
+done <<< "$staged"
+
+exit "$rc"
