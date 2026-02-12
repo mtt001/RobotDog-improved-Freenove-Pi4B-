@@ -2,11 +2,7 @@
 # file: ./Code/Server/ClientAI/DevelopPlan_ClientAI.md
 
 ## Version
-v1.1 (2026-02-12 18:08 local time)
-
-## Revision History
-- 2026-02-12 18:08 v1.1  Updated phased execution tracker with timestamped status per phase (Done/On-going) for active development visibility.
-- 2026-02-12 17:57 v1.0  Rebuilt draft into a full execution proposal for browser-side YOLO inference with Pi-server deterministic safety boundary, phased delivery, KPI gates, rollback, and open decisions.
+v1.3 (2026-02-12 18:24 local time)
 
 ## Document Intent
 Define the implementation plan for ClientAI (browser YOLO inference) while keeping current Edge AI mode as user-selectable fallback. This file is the working execution plan for all ClientAI development under `Code/Server/ClientAI/`.
@@ -22,9 +18,11 @@ New goal:
 
 ## Objective
 1. Introduce ClientAI inference path using ONNX Runtime Web.
-2. Keep Pi server as deterministic I/O and safety appliance (authoritative command gating).
-3. Default to ClientAI mode on capable client devices, with explicit manual override and automatic fallback to Edge AI.
-4. Keep development artifacts organized under `Code/Server/ClientAI/`, with changelog discipline and README traceability.
+2. Offload compute-heavy object-detection inference from Pi to capable browser clients (Mac/iPad/iPhone), with Pi primarily serving web assets, video, and APIs.
+3. Keep Pi server as deterministic I/O and safety appliance with authoritative command gating, even when inference is client-side.
+4. Ensure browser detections are treated as advisory inputs that must pass server-side validation before any tracking/control consumption.
+5. Default to ClientAI mode on capable client devices, with explicit manual override and automatic fallback to Edge AI.
+6. Keep development artifacts organized under `Code/Server/ClientAI/`, with changelog discipline and README traceability.
 
 ## Scope
 In scope:
@@ -33,11 +31,15 @@ In scope:
 - Client-to-server target publishing contract for tracking-assist use.
 - Mode switching policy (`client-ai`, `edge-ai`, `off`) and fallback behavior.
 - Cross-device performance validation (Safari iOS/macOS, Chrome desktop).
+- Pi-side validation and protection path for client target payloads (freshness/schema/range/allowlist/rate-limit).
+- Pi-side safety continuity: ownership, arm/disarm, watchdog, emergency-stop precedence remain server-authoritative.
+- Pi-side fallback orchestration when client inference is unavailable/unstable/slow.
 
 Out of scope for this phase:
 - Fully autonomous motion based only on browser detections.
 - WAN hardening changes unrelated to ClientAI execution.
 - Replacing existing Edge AI implementation.
+- Removing Pi-side safety and command arbitration responsibilities.
 
 ## Architecture Principles
 1. Pi server remains authoritative for:
@@ -227,3 +229,12 @@ Rollback acceptance:
 3. Do you want a single model family only, or dual model policy (`best` primary + fallback model)?
 4. Should auto mode selection persist per device/session, and where should preference be stored?
 5. Which endpoint shape is preferred for target publishing (`POST` polling vs `WebSocket`)?
+
+=========================================================================
+=========================================================================
+
+## Revision History
+- 2026-02-12 18:24 v1.3  Moved revision-history section to end of file to keep plan overview clean at document start.
+- 2026-02-12 18:22 v1.2  Refactored core clarification into Objective/Scope: Pi offloads heavy AI inference to browser clients, while Pi remains authoritative for safety validation, command gating, and fallback orchestration.
+- 2026-02-12 18:08 v1.1  Updated phased execution tracker with timestamped status per phase (Done/On-going) for active development visibility.
+- 2026-02-12 17:57 v1.0  Rebuilt draft into a full execution proposal for browser-side YOLO inference with Pi-server deterministic safety boundary, phased delivery, KPI gates, rollback, and open decisions.
