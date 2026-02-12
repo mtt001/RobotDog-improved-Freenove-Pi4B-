@@ -2,7 +2,7 @@
 # file: ./Code/Server/ClientAI/DevelopPlan_ClientAI.md
 
 ## Version
-v1.3 (2026-02-12 18:24 local time)
+v1.4 (2026-02-12 18:30 local time)
 
 ## Document Intent
 Define the implementation plan for ClientAI (browser YOLO inference) while keeping current Edge AI mode as user-selectable fallback. This file is the working execution plan for all ClientAI development under `Code/Server/ClientAI/`.
@@ -131,7 +131,7 @@ Adaptive degrade policy:
 
 ## Phased Delivery Plan
 ### Phase A - Foundation And Contract
-Status: Done (2026-02-12 18:08 local time)
+Status: Done (2026-02-12 18:30 local time)
 
 Deliverables:
 - `Server/ClientAI/README_ClientAI.md` (design + runbook + file map)
@@ -141,9 +141,10 @@ Deliverables:
 Acceptance:
 - schema test vectors pass
 - mode state visible in runtime status endpoint
+Progress note (2026-02-12 18:30): mode/state APIs and client-target validation stub are implemented in `Server/telemetry_api_server.py`; ClientAI status is visible in telemetry and diagnostics payloads.
 
 ### Phase B - Browser Inference MVP (Read-Only Overlay)
-Status: On-going (2026-02-12 18:08 local time)
+Status: Done (2026-02-12 18:30 local time)
 
 Deliverables:
 - ONNX Runtime Web loader + model init logic
@@ -154,9 +155,10 @@ Deliverables:
 Acceptance:
 - overlay and metrics visible on Safari + Chrome
 - no control-path changes required for operation
+Progress note (2026-02-12 18:30): `Server/web/webrtc_view.html` now includes ONNX Runtime Web bootstrap, frame sampling/inference loop scaffold, and overlay canvas render path.
 
 ### Phase C - Controlled Target Publish Integration
-Status: On-going (2026-02-12 18:08 local time; queued after Phase B completion)
+Status: On-going (2026-02-12 18:30 local time)
 
 Deliverables:
 - target publish channel from browser to server
@@ -166,9 +168,10 @@ Deliverables:
 Acceptance:
 - invalid/stale payloads are rejected and logged
 - valid payloads influence tracking only when safety state allows
+Progress note (2026-02-12 18:30): advisory target publish to `/api/vision/client-target` is wired from browser; validation/rate/TTL enforcement is implemented server-side, but downstream tracking-assist consumer integration is still pending.
 
 ### Phase D - Hardening And Fallback
-Status: On-going (2026-02-12 18:08 local time; queued after Phase C completion)
+Status: On-going (2026-02-12 18:30 local time; queued after Phase C completion)
 
 Deliverables:
 - auto capability check + default mode policy
@@ -180,7 +183,7 @@ Acceptance:
 - one-switch rollback to current Edge AI behavior
 
 ### Phase E - Verification, Runbook, and Pi Sync Gate
-Status: On-going (2026-02-12 18:08 local time; final verification gate)
+Status: On-going (2026-02-12 18:30 local time; final verification gate)
 
 Deliverables:
 - verification report with KPI table by device/browser
@@ -234,6 +237,7 @@ Rollback acceptance:
 =========================================================================
 
 ## Revision History
+- 2026-02-12 18:30 v1.4  Updated phase execution status after implementation progress: Phase-A Done, Phase-B Done, Phase-C On-going with advisory publish + server validation completed and tracking-consumer integration pending.
 - 2026-02-12 18:24 v1.3  Moved revision-history section to end of file to keep plan overview clean at document start.
 - 2026-02-12 18:22 v1.2  Refactored core clarification into Objective/Scope: Pi offloads heavy AI inference to browser clients, while Pi remains authoritative for safety validation, command gating, and fallback orchestration.
 - 2026-02-12 18:08 v1.1  Updated phased execution tracker with timestamped status per phase (Done/On-going) for active development visibility.

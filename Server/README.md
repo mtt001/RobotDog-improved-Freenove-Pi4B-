@@ -3,7 +3,7 @@
 > **Server-only README** — this file documents the Raspberry Pi Server code and **syncs with the Pi Server side**.
 
 ## Version
-v1.16.24 (2026-02-12 17:43 local time)
+v1.16.25 (2026-02-12 18:33 local time)
 
 ## Quick Start
 1. Start core server (headless fallback):
@@ -53,6 +53,9 @@ This deployment is now Pi-first and can run standalone for control + streaming +
   - `/api/session` (arm/disarm + control-lock status)
   - `/api/command` (session-gated command path)
   - `/api/diagnostics` (service + port + session diagnostics)
+  - `/api/clientai` (ClientAI mode/state policy contract)
+  - `/api/clientai/model-manifest` and `/api/clientai/model/<name>` (browser model bootstrap stream)
+  - `/api/vision/client-target` (advisory browser-target validation ingress)
 
 5. YOLO/Tracking runtime (Pi color-viewer lane):
 - `robot-color-viewer.service` runs `color_viewer_server.py` (Pi deployment source tracked from `Client/tools/imu_viewer/color_viewer_server.py`).
@@ -446,6 +449,7 @@ curl http://192.168.0.32:8090/api/telemetry
   - tighter telemetry/API access control
 
 ## Revision History
+- 2026-02-12 18:30 v1.16.25  Added ClientAI Phase-A/B/C runtime documentation: new telemetry-service endpoints (`/api/clientai`, model-manifest/model stream, `/api/vision/client-target`) and browser-side inference overlay/publish path in `Server/web/webrtc_view.html`.
 - 2026-02-12 17:42 v1.16.24  Added cache-control hardening for Pi color-viewer runtime (`Cache-Control: no-store`) plus frontend delayed `/video/config` resync behavior to mitigate stale Safari resolution-profile UI after refresh.
 - 2026-02-12 17:33 v1.16.23  Added `/color` runtime note: video-profile apply now triggers immediate client-side WebRTC renegotiation so new publisher resolution is reflected without manual refresh in normal conditions.
 - 2026-02-12 17:26 v1.16.22  Added Pi `/video/config` persistence/apply documentation: selected profile is stored in `video_runtime_config.json`, publisher WIDTH/HEIGHT override is emitted to `video_publisher_profile.env`, and `robot-publisher.service` restart is attempted for immediate WebRTC resolution switching.

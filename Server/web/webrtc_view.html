@@ -1,8 +1,9 @@
 <!doctype html>
 <!--
 File: webrtc_view.html
-Version: v1.13 (2026-02-10 07:33)
+Version: v1.14 (2026-02-12 18:30)
 Revision History:
+- 2026-02-12 18:30 v1.14  Add ClientAI Phase-B/C web runtime scaffold: browser ONNX bootstrap, detection overlay canvas, mode/state panel, and advisory target publish to server validation endpoint.
 - 2026-02-10 07:33 v1.13  Wire mobile `Balance` toggle to backend API (`balance_on`/`balance_off`) with ARM/session safety.
 - 2026-02-10 07:27 v1.12  Wire low-risk actions (Beep/LED/Cal) to `/api/command` under existing ARM/session gate.
 - 2026-02-10 07:25 v1.11  Expand IMU 3D block with tunable smoothing/axis scaling and stale-freeze status badge.
@@ -23,6 +24,7 @@ Revision History:
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Robot Dog Live View (WebRTC/WHEP)</title>
+  <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js"></script>
   <style>
     :root {
       color-scheme: dark;
@@ -104,12 +106,20 @@ Revision History:
       overflow: hidden;
       border: 1px solid var(--line);
       background: #000;
+      position: relative;
     }
     video {
       width: 100%;
       height: 100%;
       object-fit: contain;
       background: #000;
+    }
+    #clientAiOverlay {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
     }
     .telemetry {
       margin-top: 10px;
@@ -263,6 +273,29 @@ Revision History:
       gap: 8px;
       align-items: center;
       margin-bottom: 8px;
+    }
+    .clientai-panel {
+      margin-bottom: 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: rgba(3, 7, 14, 0.45);
+      padding: 8px;
+    }
+    .clientai-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin-bottom: 8px;
+    }
+    .clientai-row select {
+      min-width: 150px;
+      padding: 6px 8px;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      background: #0b1322;
+      color: #dbeafe;
+      font-size: 0.8rem;
     }
     .cmd-status {
       font-size: 0.82rem;
@@ -446,6 +479,7 @@ Revision History:
 
     <div class="video-wrap">
       <video id="video" autoplay muted playsinline controls></video>
+      <canvas id="clientAiOverlay"></canvas>
     </div>
 
     <section class="telemetry">
@@ -507,6 +541,27 @@ Revision History:
 
     <section class="cmd-panel">
       <h2 class="cmd-title">Mobile Command (Safety-First MVP)</h2>
+      <div class="clientai-panel">
+        <div class="clientai-row">
+          <strong style="font-size:0.84rem;color:#dbeafe;">ClientAI</strong>
+          <select id="clientAiMode">
+            <option value="client-ai">client-ai</option>
+            <option value="edge-ai">edge-ai</option>
+            <option value="off">off</option>
+          </select>
+          <button id="clientAiApply" class="cmd-btn secondary" type="button">Apply</button>
+          <button id="clientAiAuto" class="cmd-btn secondary" type="button">Auto</button>
+          <span class="cmd-status" id="clientAiLine">ClientAI: initializing...</span>
+        </div>
+        <div class="diag-grid">
+          <div class="telemetry-item"><div class="k">Requested</div><div class="v" id="clientAiRequested">--</div></div>
+          <div class="telemetry-item"><div class="k">Active</div><div class="v" id="clientAiActive">--</div></div>
+          <div class="telemetry-item"><div class="k">Fallback</div><div class="v" id="clientAiFallback">--</div></div>
+          <div class="telemetry-item"><div class="k">Provider</div><div class="v" id="clientAiProvider">--</div></div>
+          <div class="telemetry-item"><div class="k">Model</div><div class="v" id="clientAiModel">--</div></div>
+          <div class="telemetry-item"><div class="k">Infer ms</div><div class="v" id="clientAiInfer">--</div></div>
+        </div>
+      </div>
       <div class="cmd-session">
         <button id="requestBtn" class="cmd-btn" type="button">Request Control</button>
         <button id="releaseBtn" class="cmd-btn secondary" type="button">Release Control</button>
@@ -632,7 +687,7 @@ Revision History:
     let sessionTimer = null;
     let holdTimer = null;
     let activeHoldBtn = null;
-    const BUILD_LABEL = 'v1.13 | 2026-02-10 07:33';
+    const BUILD_LABEL = 'v1.14 | 2026-02-12 18:30';
     let cmdArmed = false;
     let balanceOn = false;
     const imuRender = { roll: 0, pitch: 0, yaw: 0 };
@@ -1134,6 +1189,343 @@ Revision History:
       setStatus(`Connect error: ${err.message}`, 'err');
     });
     renderBalance();
+  </script>
+  <script>
+    (function () {
+      const overlay = document.getElementById('clientAiOverlay');
+      const video = document.getElementById('video');
+      const modeSel = document.getElementById('clientAiMode');
+      const applyBtn = document.getElementById('clientAiApply');
+      const autoBtn = document.getElementById('clientAiAuto');
+      const line = document.getElementById('clientAiLine');
+      const vRequested = document.getElementById('clientAiRequested');
+      const vActive = document.getElementById('clientAiActive');
+      const vFallback = document.getElementById('clientAiFallback');
+      const vProvider = document.getElementById('clientAiProvider');
+      const vModel = document.getElementById('clientAiModel');
+      const vInfer = document.getElementById('clientAiInfer');
+      if (!overlay || !video || !modeSel || !applyBtn || !autoBtn || !line) return;
+
+      const ctx = overlay.getContext('2d', { alpha: true });
+      const DET_LABELS = [
+        'person','bicycle','car','motorcycle','airplane','bus','train','truck','boat','traffic light',
+        'fire hydrant','stop sign','parking meter','bench','bird','cat','dog','horse','sheep','cow',
+        'elephant','bear','zebra','giraffe','backpack','umbrella','handbag','tie','suitcase','frisbee',
+        'skis','snowboard','sports ball','kite','baseball bat','baseball glove','skateboard','surfboard','tennis racket','bottle',
+        'wine glass','cup','fork','knife','spoon','bowl','banana','apple','sandwich','orange',
+        'broccoli','carrot','hot dog','pizza','donut','cake','chair','couch','potted plant','bed',
+        'dining table','toilet','tv','laptop','mouse','remote','keyboard','cell phone','microwave','oven',
+        'toaster','sink','refrigerator','book','clock','vase','scissors','teddy bear','hair drier','toothbrush',
+      ];
+      const ALLOW = new Set(['sports ball', 'person', 'dog', 'cat']);
+      const state = {
+        status: null,
+        session: null,
+        inference: null,
+        running: false,
+        ready: false,
+        frameId: 0,
+        inferEveryN: 6,
+        inferMsAvg: null,
+        publishOk: 0,
+        publishErr: 0,
+        modelName: '',
+        provider: 'unknown',
+      };
+      const sampleCanvas = document.createElement('canvas');
+      const sampleCtx = sampleCanvas.getContext('2d', { willReadFrequently: true });
+
+      function apiBase() {
+        const p = new URLSearchParams(window.location.search);
+        const fromQuery = p.get('api');
+        if (fromQuery) return fromQuery.replace(/\/$/, '');
+        const proto = window.location.protocol === 'https:' ? 'https:' : 'http:';
+        const host = window.location.hostname || '192.168.0.32';
+        return `${proto}//${host}:8090`;
+      }
+      function api(path) {
+        return `${apiBase()}${path}`;
+      }
+      function detectCapability() {
+        const hasWebGpu = !!(navigator && navigator.gpu);
+        const hasWasm = typeof WebAssembly === 'object';
+        return {
+          client_ai_capable: hasWebGpu || hasWasm,
+          provider: hasWebGpu ? 'webgpu' : (hasWasm ? 'wasm' : 'unknown'),
+        };
+      }
+      function resizeOverlay() {
+        const rect = overlay.getBoundingClientRect();
+        const w = Math.max(2, Math.round(rect.width));
+        const h = Math.max(2, Math.round(rect.height));
+        if (overlay.width !== w || overlay.height !== h) {
+          overlay.width = w;
+          overlay.height = h;
+        }
+      }
+      function drawBoxes(boxes) {
+        resizeOverlay();
+        ctx.clearRect(0, 0, overlay.width, overlay.height);
+        ctx.lineWidth = 2;
+        ctx.font = '12px sans-serif';
+        for (const b of boxes) {
+          const x = Math.max(0, b.x1 * overlay.width);
+          const y = Math.max(0, b.y1 * overlay.height);
+          const w = Math.max(1, (b.x2 - b.x1) * overlay.width);
+          const h = Math.max(1, (b.y2 - b.y1) * overlay.height);
+          ctx.strokeStyle = '#22c55e';
+          ctx.fillStyle = 'rgba(34,197,94,0.15)';
+          ctx.strokeRect(x, y, w, h);
+          ctx.fillRect(x, y, w, h);
+          const label = `${b.label} ${b.conf.toFixed(2)}`;
+          ctx.fillStyle = '#22c55e';
+          ctx.fillRect(x, Math.max(0, y - 16), (label.length * 7) + 6, 14);
+          ctx.fillStyle = '#00120a';
+          ctx.fillText(label, x + 3, Math.max(10, y - 5));
+        }
+      }
+      function iou(a, b) {
+        const x1 = Math.max(a.x1, b.x1);
+        const y1 = Math.max(a.y1, b.y1);
+        const x2 = Math.min(a.x2, b.x2);
+        const y2 = Math.min(a.y2, b.y2);
+        const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+        const areaA = Math.max(0, a.x2 - a.x1) * Math.max(0, a.y2 - a.y1);
+        const areaB = Math.max(0, b.x2 - b.x1) * Math.max(0, b.y2 - b.y1);
+        const union = areaA + areaB - inter;
+        return union <= 0 ? 0 : inter / union;
+      }
+      function nms(boxes, thr = 0.45) {
+        const sorted = boxes.slice().sort((a, b) => b.conf - a.conf);
+        const out = [];
+        while (sorted.length > 0) {
+          const pick = sorted.shift();
+          out.push(pick);
+          for (let i = sorted.length - 1; i >= 0; i -= 1) {
+            if (sorted[i].label === pick.label && iou(sorted[i], pick) > thr) sorted.splice(i, 1);
+          }
+          if (out.length >= 20) break;
+        }
+        return out;
+      }
+      function decodeYolo(output, inputW, inputH, confThr = 0.30) {
+        if (!output || !output.data || !Array.isArray(output.dims) || output.dims.length !== 3) return [];
+        const dims = output.dims;
+        const data = output.data;
+        let channels;
+        let count;
+        let stride;
+        let chanFirst = false;
+        if (dims[1] >= 8 && dims[2] >= 8) {
+          if (dims[1] > dims[2]) {
+            channels = dims[1];
+            count = dims[2];
+            chanFirst = true;
+          } else {
+            channels = dims[2];
+            count = dims[1];
+            chanFirst = false;
+          }
+        } else {
+          return [];
+        }
+        stride = channels;
+        const boxes = [];
+        for (let i = 0; i < count; i += 1) {
+          const base = chanFirst ? i : i * stride;
+          const get = (c) => (chanFirst ? data[(c * count) + i] : data[base + c]);
+          const cx = get(0);
+          const cy = get(1);
+          const w = get(2);
+          const h = get(3);
+          let bestC = -1;
+          let bestV = 0;
+          for (let c = 4; c < channels; c += 1) {
+            const v = get(c);
+            if (v > bestV) {
+              bestV = v;
+              bestC = c - 4;
+            }
+          }
+          if (bestV < confThr) continue;
+          const label = DET_LABELS[bestC] || `cls_${bestC}`;
+          if (!ALLOW.has(label)) continue;
+          const x1 = (cx - (w / 2)) / inputW;
+          const y1 = (cy - (h / 2)) / inputH;
+          const x2 = (cx + (w / 2)) / inputW;
+          const y2 = (cy + (h / 2)) / inputH;
+          boxes.push({
+            label,
+            conf: Math.max(0, Math.min(1, bestV)),
+            x1: Math.max(0, Math.min(1, x1)),
+            y1: Math.max(0, Math.min(1, y1)),
+            x2: Math.max(0, Math.min(1, x2)),
+            y2: Math.max(0, Math.min(1, y2)),
+          });
+        }
+        return nms(boxes, 0.45);
+      }
+      function updateUi(status) {
+        if (!status) {
+          line.textContent = 'ClientAI: unavailable';
+          return;
+        }
+        vRequested.textContent = status.requested_mode || '--';
+        vActive.textContent = status.active_mode || '--';
+        vFallback.textContent = status.fallback_reason || 'none';
+        vProvider.textContent = state.provider || status.provider || '--';
+        vModel.textContent = state.modelName || status.model_id || '--';
+        vInfer.textContent = state.inferMsAvg == null ? '--' : `${state.inferMsAvg.toFixed(1)} ms`;
+        modeSel.value = status.requested_mode || modeSel.value;
+        line.textContent = `ClientAI: ${status.active_mode || 'unknown'} ${status.manual_override ? '(manual)' : '(auto)'}`;
+      }
+      async function fetchStatus() {
+        const r = await fetch(api('/api/clientai'), { cache: 'no-store' });
+        if (!r.ok) throw new Error(`status_http_${r.status}`);
+        const data = await r.json();
+        state.status = data;
+        updateUi(data);
+      }
+      async function fetchSession() {
+        const r = await fetch(api('/api/session'), { cache: 'no-store' });
+        if (!r.ok) throw new Error(`session_http_${r.status}`);
+        state.session = await r.json();
+      }
+      async function postState(patch) {
+        const body = { ...detectCapability(), model_id: state.modelName || 'yolov8n_cv451.onnx', ...patch };
+        const r = await fetch(api('/api/clientai'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data.ok) throw new Error(data.error || `state_http_${r.status}`);
+        state.status = data;
+        updateUi(data);
+      }
+      async function postTarget(payload) {
+        const r = await fetch(api('/api/vision/client-target'), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload),
+        });
+        const data = await r.json().catch(() => ({}));
+        if (!r.ok || !data.ok) {
+          state.publishErr += 1;
+          return false;
+        }
+        state.publishOk += 1;
+        return true;
+      }
+      async function loadModel() {
+        if (!window.ort) throw new Error('ort_not_loaded');
+        const manifestResp = await fetch(api('/api/clientai/model-manifest'), { cache: 'no-store' });
+        if (!manifestResp.ok) throw new Error(`manifest_http_${manifestResp.status}`);
+        const manifest = await manifestResp.json();
+        const modelItem = (manifest.models || []).find((m) => m.name === manifest.default_model) || (manifest.models || [])[0];
+        if (!modelItem) throw new Error('no_model_manifest');
+        state.modelName = modelItem.name;
+        const providers = (detectCapability().provider === 'webgpu') ? ['webgpu', 'wasm'] : ['wasm'];
+        state.provider = providers[0];
+        state.inference = await window.ort.InferenceSession.create(api(modelItem.url), {
+          executionProviders: providers,
+          graphOptimizationLevel: 'all',
+        });
+        state.ready = true;
+        await postState({ provider: state.provider, model_id: state.modelName });
+      }
+      async function inferFrame() {
+        if (!state.inference || !state.status || state.status.active_mode !== 'client-ai') return;
+        if (video.videoWidth < 16 || video.videoHeight < 16) return;
+        const inputSize = 640;
+        sampleCanvas.width = inputSize;
+        sampleCanvas.height = inputSize;
+        sampleCtx.drawImage(video, 0, 0, inputSize, inputSize);
+        const src = sampleCtx.getImageData(0, 0, inputSize, inputSize).data;
+        const chw = new Float32Array(3 * inputSize * inputSize);
+        const hw = inputSize * inputSize;
+        for (let i = 0; i < hw; i += 1) {
+          const o = i * 4;
+          chw[i] = src[o] / 255;
+          chw[hw + i] = src[o + 1] / 255;
+          chw[(2 * hw) + i] = src[o + 2] / 255;
+        }
+        const t0 = performance.now();
+        const feeds = {};
+        const firstInput = state.inference.inputNames[0];
+        feeds[firstInput] = new window.ort.Tensor('float32', chw, [1, 3, inputSize, inputSize]);
+        const outMap = await state.inference.run(feeds);
+        const outName = state.inference.outputNames[0];
+        const output = outMap[outName];
+        const inferMs = performance.now() - t0;
+        state.inferMsAvg = state.inferMsAvg == null ? inferMs : ((state.inferMsAvg * 0.85) + (inferMs * 0.15));
+        if (state.inferMsAvg > 220 && state.inferEveryN < 16) state.inferEveryN += 1;
+        const boxes = decodeYolo(output, inputSize, inputSize, 0.30);
+        drawBoxes(boxes);
+        vInfer.textContent = `${inferMs.toFixed(1)} ms`;
+        await fetchSession();
+        await postTarget({
+          ts_client_ms: Date.now(),
+          frame_id: state.frameId,
+          model_id: state.modelName,
+          provider: state.provider,
+          infer_ms: inferMs,
+          image_w: video.videoWidth,
+          image_h: video.videoHeight,
+          detections: boxes,
+        });
+      }
+      async function loop() {
+        if (!state.running) return;
+        state.frameId += 1;
+        if ((state.frameId % state.inferEveryN) === 0) {
+          try {
+            await inferFrame();
+          } catch (e) {
+            line.textContent = `ClientAI infer error: ${String(e.message || e)}`;
+            if (state.status && state.status.active_mode === 'client-ai') {
+              await postState({ mode: 'edge-ai', provider: detectCapability().provider, model_id: state.modelName });
+            }
+            ctx.clearRect(0, 0, overlay.width, overlay.height);
+          }
+        }
+        requestAnimationFrame(loop);
+      }
+      async function start() {
+        try {
+          await fetchStatus();
+          await postState({});
+          await loadModel();
+          state.running = true;
+          requestAnimationFrame(loop);
+          setInterval(async () => {
+            try {
+              await fetchStatus();
+            } catch (_) {}
+          }, 1500);
+        } catch (e) {
+          line.textContent = `ClientAI unavailable: ${String(e.message || e)}`;
+          ctx.clearRect(0, 0, overlay.width, overlay.height);
+        }
+      }
+      applyBtn.addEventListener('click', async () => {
+        try {
+          await postState({ mode: modeSel.value, provider: detectCapability().provider, model_id: state.modelName });
+        } catch (e) {
+          line.textContent = `ClientAI mode set failed: ${String(e.message || e)}`;
+        }
+      });
+      autoBtn.addEventListener('click', async () => {
+        try {
+          await postState({ action: 'reset_auto', provider: detectCapability().provider, model_id: state.modelName });
+        } catch (e) {
+          line.textContent = `ClientAI auto reset failed: ${String(e.message || e)}`;
+        }
+      });
+      window.addEventListener('resize', resizeOverlay);
+      resizeOverlay();
+      start();
+    })();
   </script>
 </body>
 </html>

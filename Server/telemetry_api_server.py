@@ -2,22 +2,27 @@
 # -*- coding: utf-8 -*-
 """
 ===============================================================================
- Project : Freenove Robot Dog - Phase 5 Telemetry + Command API
+ Project : Freenove Robot Dog - Phase 5 Telemetry + Command + ClientAI API
  File   : telemetry_api_server.py
  Author : pi (admin) + Codex
 
- Exposes telemetry and multi-client-aware command endpoints for mobile Safari viewer:
+ Exposes telemetry and multi-client-aware endpoints for Safari viewer and ClientAI:
  - /api/telemetry (JSON)
  - /api/session (JSON; arm/disarm command session)
  - /api/command (JSON; command MVP)
  - /api/diagnostics (JSON; service health + quick checks)
+ - /api/clientai (JSON; mode policy/state)
+ - /api/vision/client-target (JSON; target validation stub)
+ - /api/clientai/model-manifest (JSON; browser model bootstrap metadata)
+ - /api/clientai/model/<name> (binary model stream)
  - /health (JSON)
  - Optional API auth via bearer token (disabled by default)
 
 Version
-v1.9 (2026-02-10 07:33)
+v1.10 (2026-02-12 18:30)
 
 Revision History
+v1.10 (2026-02-12 18:30) : Add ClientAI phase foundation/MVP endpoints (mode policy, model manifest/stream, advisory target validation stub) and expose ClientAI status in telemetry/diagnostics.
 v1.9 (2026-02-10 07:33) : Add mobile `balance_on` / `balance_off` actions (ARM required).
 v1.8 (2026-02-10 07:27) : Add low-risk mobile command actions (`beep`, `led`, `cal`) under existing arm/session policy.
 v1.7 (2026-02-09 20:54) : Add optional bearer-token auth gate for /api/* endpoints (off by default) and expose auth_enabled in diagnostics.
@@ -35,6 +40,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import socket
 import threading
 import time
@@ -43,6 +49,8 @@ from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from subprocess import DEVNULL, check_output
 from urllib.parse import urlparse
+
+API_VERSION = "v1.10"
 
 
 def log_event(level: str, event: str, **fields):
@@ -595,9 +603,197 @@ class CommandState:
                 self._send_control("CMD_MOVE_STOP\n")
 
 
+class ClientAIState:
+    MODES = {"client-ai", "edge-ai", "off"}
+    PROVIDERS = {"webgpu", "wasm", "unknown"}
+
+    def __init__(self, target_ttl_ms: int = 1200, target_max_hz: float = 8.0):
+        self.lock = threading.Lock()
+        self.target_ttl_ms = max(200, int(target_ttl_ms))
+        self.target_min_interval_sec = 1.0 / max(1.0, float(target_max_hz))
+        self.default_mode = "edge-ai"
+        self.allow_labels = {"sports ball", "person", "dog", "cat"}
+        self.state_by_ip = {}
+
+    def _entry(self, client_ip: str):
+        if client_ip not in self.state_by_ip:
+            self.state_by_ip[client_ip] = {
+                "manual_mode": None,
+                "capable": False,
+                "provider": "unknown",
+                "model_id": "",
+                "fallback_reason": "capability_unknown",
+                "last_target_ts": 0.0,
+                "last_reject": "",
+                "accepted_count": 0,
+                "rejected_count": 0,
+                "last_target": None,
+            }
+        return self.state_by_ip[client_ip]
+
+    def _apple_device(self, user_agent: str):
+        ua = (user_agent or "").lower()
+        return ("macintosh" in ua) or ("iphone" in ua) or ("ipad" in ua)
+
+    def _compute_mode(self, st: dict, user_agent: str):
+        req = st["manual_mode"]
+        if req not in self.MODES:
+            req = "client-ai" if (self._apple_device(user_agent) and st["capable"]) else self.default_mode
+        if req == "off":
+            return req, "off", "operator_off"
+        if req == "edge-ai":
+            return req, "edge-ai", ""
+        if st["capable"]:
+            return req, "client-ai", ""
+        return req, "edge-ai", "capability_probe_failed"
+
+    def update_state(self, client_ip: str, body: dict):
+        with self.lock:
+            st = self._entry(client_ip)
+            if "mode" in body:
+                mode = str(body.get("mode", "")).strip().lower()
+                if mode not in self.MODES:
+                    return False, "invalid_mode"
+                st["manual_mode"] = mode
+            if str(body.get("action", "")).strip().lower() == "reset_auto":
+                st["manual_mode"] = None
+            if "client_ai_capable" in body:
+                st["capable"] = bool(body.get("client_ai_capable", False))
+            if "provider" in body:
+                provider = str(body.get("provider", "unknown")).strip().lower()
+                st["provider"] = provider if provider in self.PROVIDERS else "unknown"
+            if "model_id" in body:
+                st["model_id"] = str(body.get("model_id", "")).strip()[:64]
+        return True, ""
+
+    def status(self, client_ip: str, user_agent: str):
+        with self.lock:
+            st = self._entry(client_ip)
+            req, active, fallback = self._compute_mode(st, user_agent)
+            if fallback != "":
+                st["fallback_reason"] = fallback
+            return {
+                "requested_mode": req,
+                "active_mode": active,
+                "manual_override": st["manual_mode"] in self.MODES,
+                "client_ai_capable": st["capable"],
+                "provider": st["provider"],
+                "model_id": st["model_id"],
+                "fallback_reason": fallback,
+                "target_ttl_ms": self.target_ttl_ms,
+                "target_min_interval_ms": int(self.target_min_interval_sec * 1000),
+                "accepted_count": st["accepted_count"],
+                "rejected_count": st["rejected_count"],
+                "last_reject": st["last_reject"],
+                "last_target": st["last_target"],
+                "policy_note": "server_safety_authority",
+            }
+
+    def _validate_detection(self, det: dict):
+        label = str(det.get("label", "")).strip().lower()
+        if label not in self.allow_labels:
+            return False, "label_not_allowed"
+        conf = det.get("conf")
+        if not isinstance(conf, (float, int)) or conf < 0.0 or conf > 1.0:
+            return False, "conf_invalid"
+        coords = []
+        for key in ("x1", "y1", "x2", "y2"):
+            val = det.get(key)
+            if not isinstance(val, (float, int)) or val < 0.0 or val > 1.0:
+                return False, "bbox_invalid"
+            coords.append(float(val))
+        if coords[0] >= coords[2] or coords[1] >= coords[3]:
+            return False, "bbox_non_positive"
+        return True, ""
+
+    def validate_target(self, client_ip: str, user_agent: str, body: dict, session_armed: bool):
+        now_ms = int(time.time() * 1000)
+        with self.lock:
+            st = self._entry(client_ip)
+            req, active, fallback = self._compute_mode(st, user_agent)
+            if active != "client-ai":
+                st["rejected_count"] += 1
+                st["last_reject"] = "mode_not_client_ai"
+                return HTTPStatus.CONFLICT, {
+                    "ok": False,
+                    "accepted": False,
+                    "error": "mode_not_client_ai",
+                    "requested_mode": req,
+                    "active_mode": active,
+                    "fallback_reason": fallback,
+                }
+            if not session_armed:
+                st["rejected_count"] += 1
+                st["last_reject"] = "session_not_armed"
+                return HTTPStatus.FORBIDDEN, {"ok": False, "accepted": False, "error": "session_not_armed"}
+            if (time.time() - st["last_target_ts"]) < self.target_min_interval_sec:
+                st["rejected_count"] += 1
+                st["last_reject"] = "rate_limited"
+                return HTTPStatus.TOO_MANY_REQUESTS, {"ok": False, "accepted": False, "error": "rate_limited"}
+
+            required = ("ts_client_ms", "frame_id", "model_id", "provider", "infer_ms", "image_w", "image_h", "detections")
+            for key in required:
+                if key not in body:
+                    st["rejected_count"] += 1
+                    st["last_reject"] = f"missing_{key}"
+                    return HTTPStatus.BAD_REQUEST, {"ok": False, "accepted": False, "error": f"missing_field:{key}"}
+
+            ts_client_ms = body.get("ts_client_ms")
+            if not isinstance(ts_client_ms, (float, int)):
+                st["rejected_count"] += 1
+                st["last_reject"] = "ts_invalid"
+                return HTTPStatus.BAD_REQUEST, {"ok": False, "accepted": False, "error": "ts_client_ms_invalid"}
+            lag_ms = now_ms - int(ts_client_ms)
+            if lag_ms < -500 or lag_ms > self.target_ttl_ms:
+                st["rejected_count"] += 1
+                st["last_reject"] = "target_stale"
+                return HTTPStatus.BAD_REQUEST, {"ok": False, "accepted": False, "error": "target_stale", "lag_ms": lag_ms}
+
+            detections = body.get("detections")
+            if not isinstance(detections, list) or len(detections) > 20:
+                st["rejected_count"] += 1
+                st["last_reject"] = "detections_invalid"
+                return HTTPStatus.BAD_REQUEST, {"ok": False, "accepted": False, "error": "detections_invalid"}
+            for det in detections:
+                if not isinstance(det, dict):
+                    st["rejected_count"] += 1
+                    st["last_reject"] = "detection_type_invalid"
+                    return HTTPStatus.BAD_REQUEST, {"ok": False, "accepted": False, "error": "detection_type_invalid"}
+                ok, err = self._validate_detection(det)
+                if not ok:
+                    st["rejected_count"] += 1
+                    st["last_reject"] = err
+                    return HTTPStatus.BAD_REQUEST, {"ok": False, "accepted": False, "error": err}
+
+            provider = str(body.get("provider", "unknown")).strip().lower()
+            st["provider"] = provider if provider in self.PROVIDERS else "unknown"
+            st["model_id"] = str(body.get("model_id", "")).strip()[:64]
+            st["last_target_ts"] = time.time()
+            st["accepted_count"] += 1
+            st["last_reject"] = ""
+            st["last_target"] = {
+                "ts_client_ms": int(ts_client_ms),
+                "frame_id": int(body.get("frame_id", 0)),
+                "infer_ms": float(body.get("infer_ms", 0.0)),
+                "detections_count": len(detections),
+                "lag_ms": lag_ms,
+                "provider": st["provider"],
+                "model_id": st["model_id"],
+            }
+            return HTTPStatus.OK, {
+                "ok": True,
+                "accepted": True,
+                "active_mode": active,
+                "requested_mode": req,
+                "fallback_reason": fallback,
+                "target": st["last_target"],
+            }
+
+
 class Handler(BaseHTTPRequestHandler):
     state = None
     command_state = None
+    client_ai_state = None
     stream_path = "robotdog"
     api_token = ""
 
@@ -645,27 +841,93 @@ class Handler(BaseHTTPRequestHandler):
         self._set_headers(HTTPStatus.UNAUTHORIZED)
         self.wfile.write(json.dumps({"ok": False, "error": "unauthorized"}).encode("utf-8"))
 
+    def _client_ai_model_paths(self):
+        base = os.path.dirname(os.path.abspath(__file__))
+        model_dir = os.path.join(base, "color_viewer", "models")
+        return {
+            "yolov8n_cv451.onnx": os.path.join(model_dir, "yolov8n_cv451.onnx"),
+            "best_cv451.onnx": os.path.join(model_dir, "best_cv451.onnx"),
+        }
+
+    def _serve_binary_model(self, file_path: str):
+        if not os.path.isfile(file_path):
+            self._set_headers(HTTPStatus.NOT_FOUND)
+            self.wfile.write(json.dumps({"ok": False, "error": "model_not_found"}).encode("utf-8"))
+            return
+        with open(file_path, "rb") as f:
+            raw = f.read()
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.send_header("Content-Length", str(len(raw)))
+        self.send_header("Cache-Control", "public, max-age=300")
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        self.end_headers()
+        self.wfile.write(raw)
+
     def do_OPTIONS(self):
         self._set_headers(HTTPStatus.NO_CONTENT)
 
     def do_GET(self):
         if self.path == "/health":
             self._set_headers(HTTPStatus.OK)
-            self.wfile.write(json.dumps({"ok": True, "ts": time.time(), "version": "v1.7"}).encode("utf-8"))
+            self.wfile.write(json.dumps({"ok": True, "ts": time.time(), "version": API_VERSION}).encode("utf-8"))
             return
 
         parsed = urlparse(self.path)
+        ip = self._client_ip()
+        user_agent = self.headers.get("User-Agent", "")
         if parsed.path.startswith("/api/") and not self._auth_ok():
             self._reject_unauthorized()
             return
+
+        if parsed.path == "/api/clientai/model-manifest":
+            model_map = self._client_ai_model_paths()
+            out = []
+            for name, file_path in model_map.items():
+                if os.path.isfile(file_path):
+                    out.append(
+                        {
+                            "name": name,
+                            "url": f"/api/clientai/model/{name}",
+                            "size_bytes": os.path.getsize(file_path),
+                        }
+                    )
+            payload = {
+                "ok": True,
+                "models": out,
+                "default_model": "yolov8n_cv451.onnx",
+                "status": Handler.client_ai_state.status(ip, user_agent),
+            }
+            self._set_headers(HTTPStatus.OK)
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
+            return
+
+        if parsed.path.startswith("/api/clientai/model/"):
+            model_name = parsed.path.split("/api/clientai/model/", 1)[1]
+            model_map = self._client_ai_model_paths()
+            if model_name not in model_map:
+                self._set_headers(HTTPStatus.NOT_FOUND)
+                self.wfile.write(json.dumps({"ok": False, "error": "model_not_allowed"}).encode("utf-8"))
+                return
+            self._serve_binary_model(model_map[model_name])
+            return
+
         if parsed.path.startswith("/api/telemetry"):
             payload = Handler.state.get_payload()
+            payload["client_ai"] = Handler.client_ai_state.status(ip, user_agent)
+            self._set_headers(HTTPStatus.OK)
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
+            return
+
+        if parsed.path == "/api/clientai":
+            payload = {"ok": True, "client_ip": ip, "ts": time.time(), **Handler.client_ai_state.status(ip, user_agent)}
             self._set_headers(HTTPStatus.OK)
             self.wfile.write(json.dumps(payload).encode("utf-8"))
             return
 
         if parsed.path == "/api/session":
-            ip = self._client_ip()
             sess = Handler.command_state.session_status(ip)
             payload = {"ok": True, "client_ip": ip, "ts": time.time(), **sess}
             self._set_headers(HTTPStatus.OK)
@@ -673,8 +935,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if parsed.path == "/api/diagnostics":
-            ip = self._client_ip()
-            payload = self._diagnostics_payload(ip)
+            payload = self._diagnostics_payload(ip, user_agent)
             self._set_headers(HTTPStatus.OK)
             self.wfile.write(json.dumps(payload).encode("utf-8"))
             return
@@ -709,6 +970,36 @@ class Handler(BaseHTTPRequestHandler):
             self.wfile.write(json.dumps(payload).encode("utf-8"))
             return
 
+        if parsed.path == "/api/clientai":
+            ok, err = Handler.client_ai_state.update_state(ip, body)
+            if not ok:
+                self._set_headers(HTTPStatus.BAD_REQUEST)
+                self.wfile.write(json.dumps({"ok": False, "error": err}).encode("utf-8"))
+                return
+            payload = {
+                "ok": True,
+                "client_ip": ip,
+                "ts": time.time(),
+                **Handler.client_ai_state.status(ip, self.headers.get("User-Agent", "")),
+            }
+            self._set_headers(HTTPStatus.OK)
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
+            return
+
+        if parsed.path == "/api/vision/client-target":
+            session = Handler.command_state.session_status(ip)
+            code, payload = Handler.client_ai_state.validate_target(
+                ip,
+                self.headers.get("User-Agent", ""),
+                body,
+                bool(session.get("armed", False)),
+            )
+            payload["client_ip"] = ip
+            payload["ts"] = time.time()
+            self._set_headers(code)
+            self.wfile.write(json.dumps(payload).encode("utf-8"))
+            return
+
         if parsed.path == "/api/command":
             action = str(body.get("action", "")).strip().lower()
             code, payload = Handler.command_state.execute(ip, action)
@@ -723,7 +1014,7 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         return
 
-    def _diagnostics_payload(self, client_ip: str):
+    def _diagnostics_payload(self, client_ip: str, user_agent: str):
         now_ts = time.time()
         services = {
             "smartdog.service": service_active("smartdog.service"),
@@ -740,7 +1031,7 @@ class Handler(BaseHTTPRequestHandler):
         payload = {
             "ok": True,
             "ts": now_ts,
-            "version": "v1.7",
+            "version": API_VERSION,
             "client_ip": client_ip,
             "auth_enabled": (Handler.api_token or "") != "",
             "services": services,
@@ -748,6 +1039,7 @@ class Handler(BaseHTTPRequestHandler):
             "stream_rtsp_describe_ok": rtsp_describe_ok("127.0.0.1", Handler.stream_path),
             "session": session,
             "command_state": Handler.command_state.snapshot(),
+            "client_ai": Handler.client_ai_state.status(client_ip, user_agent),
         }
         return payload
 
@@ -763,6 +1055,8 @@ def main():
     p.add_argument("--arm-ttl", type=float, default=20.0)
     p.add_argument("--motion-timeout", type=float, default=0.9)
     p.add_argument("--api-token", default="")
+    p.add_argument("--client-target-ttl-ms", type=int, default=1200)
+    p.add_argument("--client-target-max-hz", type=float, default=8.0)
     args = p.parse_args()
 
     state = TelemetryState(args.control_host, args.control_port, args.stream_path)
@@ -773,6 +1067,10 @@ def main():
         client=state.client,
         arm_ttl_sec=args.arm_ttl,
         motion_timeout_sec=args.motion_timeout,
+    )
+    Handler.client_ai_state = ClientAIState(
+        target_ttl_ms=args.client_target_ttl_ms,
+        target_max_hz=args.client_target_max_hz,
     )
 
     poller = PollThread(state, args.poll_interval)

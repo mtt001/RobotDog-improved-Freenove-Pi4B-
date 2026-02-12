@@ -1,7 +1,7 @@
 # Freenove Robot Dog - Client
 
 ## Version
-v1.12.48 (2026-02-12 18:04 local time)
+v1.12.48 (2026-02-12 18:33 local time)
 
 ## Quick Start (new users)
 1. Enter client environment first:
