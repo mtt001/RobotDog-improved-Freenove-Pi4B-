@@ -1,7 +1,7 @@
 # Freenove Robot Dog - Client
 
 ## Version
-v1.12.48 (2026-02-12 18:33 local time)
+v1.12.54 (2026-02-13 21:53 local time)
 
 ## Quick Start (new users)
 1. Enter client environment first:
@@ -34,6 +34,10 @@ Important:
 - `http://192.168.0.32:8889/robotdog/whep` is a WebRTC signaling endpoint (API), not a page for direct viewing.
 - `mtDogMain.py` uses SFU RTSP by default (`rtsp://192.168.0.32:8554/robotdog`), while Safari pages use WebRTC/WHEP via SFU.
 - Telemetry overlay is read-only and polls `http://192.168.0.32:8090/api/telemetry` (stale/backend-down indications shown in UI).
+- `/color` page now includes `Debug Detection (ClientAI)` section (default off) for bright-vs-dark YOLO diagnosis:
+  - raw-all-detections overlay with configurable minimum confidence,
+  - per-frame JSON log (`console` and optional `on-screen`),
+  - optional Ball Heuristics toggles (`ROI` and `size` gates).
 - Viewer page now shows a visible build badge (`Build: vX | YYYY-MM-DD HH:MM`) to confirm deployed runtime version.
 - Phase-3 command MVP is enabled in the viewer:
   - Session arm/disarm API: `http://192.168.0.32:8090/api/session`
@@ -484,6 +488,12 @@ curl http://192.168.0.32:8090/api/telemetry
   - access control for telemetry endpoints
 
 ## Revision History
+- 2026-02-13 21:39 v1.12.54  Added `/color` Debug Detection usage note for bright-vs-dark YOLO diagnosis (raw overlay + per-frame JSON logs + optional ROI/size Ball Heuristics toggles).
+- 2026-02-13 21:39 v1.12.53  Updated `/color` guardrail tuning note: MT-ball minimum bbox area threshold is rebalanced to `0.008` (from `0.015`) while keeping 2-frame class-switch confirmation to improve hard-scene detect duty-cycle.
+- 2026-02-13 21:34 v1.12.52  Added `/color` ClientAI guardrail #4 note: MT-ball minimum bbox area gate and 2-frame class-switch confirmation are active to reduce transient non-ball lock flips under low-light/occlusion scenes.
+- 2026-02-13 19:31 v1.12.51  Added `/color` ClientAI hard-scene behavior note: MT-ball confidence now uses short-window IoU-gated drop-limiting before advisory publish to reduce one-frame lighting-dip churn during low-light/occlusion runs.
+- 2026-02-13 15:08 v1.12.50  Updated `/color` operator-workflow note: placeholder and Pi tuning controls are now moved to hidden virtual space so the visible panel stays focused on active ClientAI controls and essential runtime actions.
+- 2026-02-13 15:03 v1.12.49  Updated `/color` operator-UI note for ClientAI-first workflow: metrics panel now hides Pi-edge/runtime tuning rows in virtual debug space and removes visible Pi-edge wording to keep operator view clean.
 - 2026-02-12 17:42 v1.12.48  Added Safari refresh reliability note for `/color` resolution profile: no-store response policy + delayed profile resync (`/video/config`) after page load to reduce stale default `960` UI fallback.
 - 2026-02-12 17:33 v1.12.47  Added `/color` post-apply auto WebRTC renegotiation behavior note so resolution profile changes become effective without manual refresh in normal operation.
 - 2026-02-12 17:26 v1.12.46  Added persisted `/color` resolution-selection behavior documentation (`video_runtime_config.json` + `video_publisher_profile.env`), including immediate apply path via `robot-publisher.service` restart and fallback-on-next-restart behavior.

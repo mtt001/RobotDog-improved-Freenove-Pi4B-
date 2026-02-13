@@ -4,8 +4,16 @@ IMU Viewer Color Page
 Description:
   Color model viewer with IMU telemetry, diagnostics, and model load status.
 Version:
-  2026.02.12-38
+  2026.02.13-46
 Revision History:
+  2026-02-13 21:39 - Added compact `Debug Detection` section for `/color` ClientAI diagnostics: raw-detection visibility toggles, per-frame JSON log controls, and optional ball-heuristics gates (ROI/size) with editable thresholds.
+  2026-02-13 17:47 - Clarified ClientAI publish field wording for operator readability: `Publish Counters` now explicitly indicates `accepted/rejected/local_skip` semantics.
+  2026-02-13 15:27 - Added ClientAI model selector dial (`best_cv451_onnx`, `yolov8n*`, `Mix`) in `/color` action panel for browser-side runtime choice control.
+  2026-02-13 15:08 - Cleaned operator UI clutter for ClientAI-first workflow: moved placeholder/footer and Pi-tuning controls into hidden virtual spaces, removed disabled trial keys (`X`, `V`, `Face`) from visible action panel, and kept only live operational controls on-screen.
+  2026-02-13 15:03 - Polished `Vision/Stream Metrics` for ClientAI-first operations: removed Pi Edge wording from visible metrics and moved Pi-edge/runtime tuning rows into hidden virtual debug space to keep operator UI clean.
+  2026-02-12 21:16 - Corrected metrics ownership labeling: bottom `Vision/Stream Metrics` is explicitly Pi runtime, and added separate `ClientAI Infer (ms)`/model rows to avoid conflating Pi infer latency with browser ClientAI latency.
+  2026-02-12 20:51 - Clarified metrics-source visibility: `Vision/Stream Metrics` header now has runtime source suffix (`- Pi` / `- ClientAI`) so infer latency ownership is explicit during mode switches.
+  2026-02-12 19:41 - Added ClientAI policy/status controls to tuned `/color` action panel (mode select/apply/auto + requested/active/fallback/provider/model/infer status) using existing layout styles.
   2026-02-12 16:09 - Added explicit lower-left `Battery State` runtime line to show NORMAL/LOW status with threshold and duration details from Pi telemetry low-battery policy.
   2026-02-12 15:45 - Added compact `Ports` runtime line in lower-left HUD and prepared diag display fields for LAN-reachable control host rendering instead of loopback-only (`127.0.0.1`) operator text.
   2026-02-12 14:51 - Refined operator HUD density and control ergonomics: removed redundant lower-left rows (status/proxy-time/model state), merged live-clients header+summary, added video profile selector (`1280/960/640`), and tightened battery-scope labels/axis spacing for clearer oscilloscope-style readability.
@@ -646,6 +654,19 @@ Revision History:
         color:#9fb1c4;
         min-height:15px;
       }
+      .cfg-debug-log{
+        margin-top:8px;
+        max-height:140px;
+        overflow:auto;
+        white-space:pre-wrap;
+        word-break:break-word;
+        background:rgba(2,8,18,.7);
+        border:1px solid rgba(120,180,255,.24);
+        border-radius:8px;
+        padding:6px 8px;
+        font-size:10px;
+        color:#bfe3ff;
+      }
       .placeholder-box .head{
         font-size:12px;
         color:#9eb1c9;
@@ -867,33 +888,39 @@ Revision History:
             </div>
           </div>
           <div id="vision-metrics-box">
-            <div class="head">Vision/Stream Metrics</div>
+            <div class="head" id="vm-header">Vision/Stream Metrics</div>
             <div class="line"><span class="k">Stream FPS</span><span class="v" id="vm-stream-fps">--</span></div>
-            <div class="line"><span class="k" id="vm-infer-key">Infer (ms)</span><span class="v" id="vm-infer-ms">--</span></div>
-            <div class="line"><span class="k">Infer Model</span><span class="v" id="vm-infer-model">--</span></div>
+            <div class="line"><span class="k" id="vm-infer-key">ClientAI Infer (ms)</span><span class="v" id="vm-infer-ms">--</span></div>
+            <div class="line"><span class="k">Model</span><span class="v" id="vm-infer-model">--</span></div>
             <div class="line"><span class="k">Min FPS Target</span><span class="v" id="vm-min-fps">--</span></div>
             <div class="line"><span class="k">P0 Status</span><span class="v" id="vm-kpi-status">--</span></div>
-            <div class="line"><span class="k">YOLO imgsz</span><span class="v" id="vm-imgsz">--</span></div>
-            <div class="line"><span class="k">Interval N</span><span class="v" id="vm-interval-n">--</span></div>
-            <div class="line"><span class="k">Auto Degrade</span><span class="v" id="vm-auto-degrade">--</span></div>
-            <div class="line"><span class="k">Throttle Action</span><span class="v" id="vm-throttle-action">--</span></div>
-            <div class="line"><span class="k">Throttle Count</span><span class="v" id="vm-throttle-count">--</span></div>
-            <div class="line"><span class="k">Preferred Stream</span><span class="v" id="vm-stream-pref">--</span></div>
-            <div class="line"><span class="k">Server MJPEG FPS</span><span class="v" id="vm-mjpeg-fps">--</span></div>
-            <div class="line"><span class="k">Client Metric Age</span><span class="v" id="vm-client-age">--</span></div>
-            <div class="line"><span class="k">Vision Mode</span><span class="v" id="vm-vision-mode">--</span></div>
-            <div class="line"><span class="k">Target Count</span><span class="v" id="vm-target-count">--</span></div>
-            <div class="line"><span class="k">Detector FPS</span><span class="v" id="vm-det-fps">--</span></div>
-            <div class="line"><span class="k">Vision Health</span><span class="v" id="vm-vision-health">--</span></div>
-            <div class="line"><span class="k">Vision Error</span><span class="v" id="vm-vision-error">--</span></div>
+            <div id="vm-virtual-space" style="display:none" aria-hidden="true">
+              <div class="line"><span class="k">ClientAI Infer (ms) mirror</span><span class="v" id="vm-clientai-infer-ms">--</span></div>
+              <div class="line"><span class="k">ClientAI Model mirror</span><span class="v" id="vm-clientai-model">--</span></div>
+              <div class="line"><span class="k">YOLO imgsz</span><span class="v" id="vm-imgsz">--</span></div>
+              <div class="line"><span class="k">Interval N</span><span class="v" id="vm-interval-n">--</span></div>
+              <div class="line"><span class="k">Auto Degrade</span><span class="v" id="vm-auto-degrade">--</span></div>
+              <div class="line"><span class="k">Throttle Action</span><span class="v" id="vm-throttle-action">--</span></div>
+              <div class="line"><span class="k">Throttle Count</span><span class="v" id="vm-throttle-count">--</span></div>
+              <div class="line"><span class="k">Preferred Stream</span><span class="v" id="vm-stream-pref">--</span></div>
+              <div class="line"><span class="k">Server MJPEG FPS</span><span class="v" id="vm-mjpeg-fps">--</span></div>
+              <div class="line"><span class="k">Client Metric Age</span><span class="v" id="vm-client-age">--</span></div>
+              <div class="line"><span class="k">Vision Mode</span><span class="v" id="vm-vision-mode">--</span></div>
+              <div class="line"><span class="k">Target Count</span><span class="v" id="vm-target-count">--</span></div>
+              <div class="line"><span class="k">Detector FPS</span><span class="v" id="vm-det-fps">--</span></div>
+              <div class="line"><span class="k">Vision Health</span><span class="v" id="vm-vision-health">--</span></div>
+              <div class="line"><span class="k">Vision Error</span><span class="v" id="vm-vision-error">--</span></div>
+            </div>
           </div>
         </div>
 
         <div id="footer-row">
-          <button class="pill">Switch to Client Mac Video</button>
-          <span class="strong">IP/Path: robotdog</span>
-          <span class="pill">Ctrl: 5001</span>
-          <span class="pill">Camera source placeholder</span>
+          <span class="strong">Live Stream: robotdog</span>
+          <span class="pill">Ctrl Port: 5001</span>
+          <div id="footer-virtual-space" style="display:none" aria-hidden="true">
+            <button class="pill">Switch to Client Mac Video</button>
+            <span class="pill">Camera source placeholder</span>
+          </div>
         </div>
       </div>
 
@@ -907,9 +934,7 @@ Revision History:
           <button class="action-btn teal" data-cmd="CMD_MOVE_LEFT#35">S</button>
           <button class="action-btn" data-cmd="CMD_RELAX">D</button>
           <button class="action-btn teal" data-cmd="CMD_MOVE_RIGHT#35">F</button>
-          <button class="action-btn placeholder" disabled title="Pending command mapping">X</button>
           <button class="action-btn green" data-cmd="CMD_MOVE_BACKWARD#35">C</button>
-          <button class="action-btn placeholder" disabled title="Pending command mapping">V</button>
         </div>
         <div class="row">
           <button class="action-btn stop" data-cmd="CMD_MOVE_STOP" style="width:100%">Space STOP</button>
@@ -925,11 +950,11 @@ Revision History:
           <button class="action-btn" id="trigger-demo" data-state="off">Demo</button>
         </div>
         <div class="row">
-          <button class="action-btn" id="toggle-tracking" data-state="off">Tracking OFF</button>
-          <button class="action-btn purple placeholder" disabled title="Pending: face mode contract">Face</button>
-        </div>
-        <div class="row">
-          <button class="action-btn" id="toggle-yolo" data-state="off" style="width:100%">Yolo Vision OFF</button>
+          <div id="action-virtual-space" style="display:none" aria-hidden="true">
+            <button class="action-btn" id="toggle-tracking" data-state="off">Tracking OFF</button>
+            <button class="action-btn purple placeholder" disabled title="Pending: face mode contract">Face</button>
+            <button class="action-btn" id="toggle-yolo" data-state="off" style="width:100%">Yolo Vision OFF</button>
+          </div>
         </div>
         <div class="row">
           <button class="action-btn" id="toggle-balance" data-state="off">Balance OFF</button>
@@ -939,12 +964,14 @@ Revision History:
           <button class="action-btn" id="reset-yaw-right" type="button" style="width:100%">Reset Yaw to Right</button>
         </div>
 
-        <div class="placeholder-box">
-          <div class="head">Attitude Angle (placeholder)</div>
-          <div class="slider-row"><span>Roll</span><input type="range" min="-20" max="20" value="0" disabled /></div>
-          <div class="slider-row"><span>Pitch</span><input type="range" min="-20" max="20" value="0" disabled /></div>
-          <div class="slider-row"><span>Yaw</span><input type="range" min="-20" max="20" value="0" disabled /></div>
-          <div class="slider-row"><span>Head</span><input type="range" min="-20" max="20" value="0" disabled /></div>
+        <div id="attitude-virtual-space" style="display:none" aria-hidden="true">
+          <div class="placeholder-box">
+            <div class="head">Attitude Angle (placeholder)</div>
+            <div class="slider-row"><span>Roll</span><input type="range" min="-20" max="20" value="0" disabled /></div>
+            <div class="slider-row"><span>Pitch</span><input type="range" min="-20" max="20" value="0" disabled /></div>
+            <div class="slider-row"><span>Yaw</span><input type="range" min="-20" max="20" value="0" disabled /></div>
+            <div class="slider-row"><span>Head</span><input type="range" min="-20" max="20" value="0" disabled /></div>
+          </div>
         </div>
 
         <div class="row">
@@ -971,7 +998,7 @@ Revision History:
         </div>
 
         <div id="vision-config-tools" class="cfg-box">
-          <div class="head">Vision Perf (Pi Service)</div>
+          <div class="head">Video Profile</div>
           <div class="cfg-grid">
             <label>
               Video Resolution
@@ -981,36 +1008,166 @@ Revision History:
                 <option value="640x360">Low (640)</option>
               </select>
             </label>
-            <label>
-              YOLO `imgsz`
-              <select id="vision-imgsz">
-                <option value="256">256</option>
-                <option value="320">320</option>
-                <option value="416">416</option>
-                <option value="512">512</option>
-              </select>
-            </label>
-            <label>
-              Detect Interval N
-              <input id="vision-interval-n" type="number" min="1" max="30" step="1" value="5" />
-            </label>
-            <label>
-              Min Stream FPS
-              <input id="vision-min-fps" type="number" min="5" max="60" step="0.5" value="20" />
-            </label>
-            <label>
-              Auto Degrade
-              <select id="vision-auto-degrade">
-                <option value="true">Enabled</option>
-                <option value="false">Disabled</option>
-              </select>
-            </label>
+            <div id="vision-perf-virtual-space" style="display:none" aria-hidden="true">
+              <label>
+                YOLO `imgsz`
+                <select id="vision-imgsz">
+                  <option value="256">256</option>
+                  <option value="320">320</option>
+                  <option value="416">416</option>
+                  <option value="512">512</option>
+                </select>
+              </label>
+              <label>
+                Detect Interval N
+                <input id="vision-interval-n" type="number" min="1" max="30" step="1" value="5" />
+              </label>
+              <label>
+                Min Stream FPS
+                <input id="vision-min-fps" type="number" min="5" max="60" step="0.5" value="20" />
+              </label>
+              <label>
+                Auto Degrade
+                <select id="vision-auto-degrade">
+                  <option value="true">Enabled</option>
+                  <option value="false">Disabled</option>
+                </select>
+              </label>
+            </div>
           </div>
           <div class="cfg-actions">
             <button id="vision-config-apply" class="action-btn" type="button">Apply</button>
             <button id="vision-config-reload" class="action-btn" type="button">Reload</button>
           </div>
           <div id="vision-config-status" class="cfg-status">Loading...</div>
+        </div>
+
+        <div id="clientai-tools" class="cfg-box">
+          <div class="head">ClientAI (Browser Inference Policy)</div>
+          <div class="cfg-grid">
+            <label>
+              ClientAI Mode
+              <select id="clientai-mode">
+                <option value="client-ai">client-ai</option>
+                <option value="edge-ai">edge-ai</option>
+                <option value="off">off</option>
+              </select>
+            </label>
+            <label>
+              Active Mode
+              <input id="clientai-active" type="text" value="--" readonly />
+            </label>
+            <label>
+              Requested
+              <input id="clientai-requested" type="text" value="--" readonly />
+            </label>
+            <label>
+              Fallback
+              <input id="clientai-fallback" type="text" value="--" readonly />
+            </label>
+            <label>
+              Provider
+              <input id="clientai-provider" type="text" value="--" readonly />
+            </label>
+            <label>
+              Model Select
+              <select id="clientai-model-choice">
+                <option value="best" selected>best_cv451_onnx (default)</option>
+                <option value="yolov8n">yolov8n*</option>
+                <option value="mix">Mix</option>
+              </select>
+            </label>
+            <label>
+              Model
+              <input id="clientai-model" type="text" value="--" readonly />
+            </label>
+            <label>
+              Infer (ms)
+              <input id="clientai-infer-ms" type="text" value="--" readonly />
+            </label>
+            <label>
+              Publish Counters (accepted/rejected/local_skip)
+              <input id="clientai-publish-counts" type="text" value="--" readonly />
+            </label>
+          </div>
+          <div class="cfg-actions">
+            <button id="clientai-apply" class="action-btn" type="button">Apply</button>
+            <button id="clientai-auto" class="action-btn" type="button">Auto</button>
+          </div>
+          <div id="clientai-status" class="cfg-status">Loading...</div>
+        </div>
+
+        <div id="clientai-debug-tools" class="cfg-box">
+          <div class="head">Debug Detection (ClientAI)</div>
+          <div class="cfg-grid">
+            <label>
+              Debug Mode
+              <select id="debug-detect-enable">
+                <option value="off" selected>off (default)</option>
+                <option value="on">on</option>
+              </select>
+            </label>
+            <label>
+              Raw Conf >=
+              <input id="debug-raw-conf" type="number" min="0.01" max="0.99" step="0.01" value="0.10" />
+            </label>
+            <label>
+              NMS IoU
+              <input id="debug-iou-nms" type="number" min="0.05" max="0.95" step="0.01" value="0.45" />
+            </label>
+            <label>
+              Max Det
+              <input id="debug-max-det" type="number" min="5" max="120" step="1" value="60" />
+            </label>
+            <label>
+              Console Log
+              <select id="debug-log-console">
+                <option value="on" selected>on</option>
+                <option value="off">off</option>
+              </select>
+            </label>
+            <label>
+              On-screen Log
+              <select id="debug-log-panel">
+                <option value="off" selected>off</option>
+                <option value="on">on</option>
+              </select>
+            </label>
+            <label>
+              Ball Heuristics
+              <select id="debug-heuristics-enable">
+                <option value="off" selected>off</option>
+                <option value="on">on</option>
+              </select>
+            </label>
+            <label>
+              ROI Gate
+              <select id="debug-roi-enable">
+                <option value="off" selected>off</option>
+                <option value="on">on</option>
+              </select>
+            </label>
+            <label>
+              ROI Gate Y (0-1)
+              <input id="debug-roi-gate-y" type="number" min="0.00" max="1.00" step="0.01" value="0.45" />
+            </label>
+            <label>
+              Size Gate
+              <select id="debug-size-enable">
+                <option value="off" selected>off</option>
+                <option value="on">on</option>
+              </select>
+            </label>
+            <label>
+              Min Area (0-1)
+              <input id="debug-min-area" type="number" min="0.0001" max="1.0" step="0.0001" value="0.0080" />
+            </label>
+            <label>
+              Max Area (0-1)
+              <input id="debug-max-area" type="number" min="0.0010" max="1.0" step="0.0001" value="0.3000" />
+            </label>
+          </div>
+          <pre id="debug-detect-log" class="cfg-debug-log" style="display:none"></pre>
         </div>
       </div>
     </div>

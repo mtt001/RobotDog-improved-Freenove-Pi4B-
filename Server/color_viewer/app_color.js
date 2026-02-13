@@ -3,8 +3,30 @@ IMU Viewer Client (Color)
 Description:
   Three.js color model viewer with IMU polling, diagnostics, and model load status.
 Version:
-  2026.02.12-49
+  2026.02.13-71
 Revision History:
+  2026-02-13 21:39 - Added Debug Detection mode for `/color` ClientAI diagnostics: optional raw-all-detections overlay (`conf>=0.10` configurable), structured per-frame JSON logging (console/panel), and ball-heuristics toggles (ROI + size gates) with editable thresholds; default runtime behavior remains unchanged when debug is off.
+  2026-02-13 21:39 - Tuned guardrail balance for hard-scene recall: reduced `MT_ball` minimum bbox area gate from `0.015` to `0.008` while keeping class-switch debounce active, improving detect duty-cycle without reintroducing transient class flips.
+  2026-02-13 21:31 - Added class-stability guardrails for hard scenes: enforce minimum `MT_ball` bbox area gate and require 2-frame confirmation before switching dominant lock from `MT_ball` to non-ball class, reducing transient lighting/occlusion misclass flips.
+  2026-02-13 19:28 - Added MT-ball confidence stability guard for hard scenes: browser runtime now applies short-window, IoU-gated drop limiting before advisory publish to suppress one-frame lighting dips (without changing model weights), improving lock consistency for `best`/`mix`.
+  2026-02-13 17:47 - Clarified ClientAI publish/reject semantics for operators: publish counters now show `accepted/rejected/local_skip`, status line adds explicit `server_last_reject` reason, and session-aware text explains unarmed skip behavior.
+  2026-02-13 15:27 - Added ClientAI model-choice dial + dual-model Mix runtime for `/color`: browser can run `best_cv451` only, `yolov8n` only, or Mix (both), with lock priority `MT_ball > Yolo_Sport_Ball > Dog`, up to 3 class overlays, and per-class box colors (MT green, YOLO classes non-green).
+  2026-02-13 15:03 - Polished `Vision/Stream Metrics` for ClientAI-first operations: removed Pi Edge wording from visible metrics, switched infer/model display to ClientAI-focused fields in `client-ai` mode, and moved Pi-edge/runtime tuning rows to hidden virtual debug section.
+  2026-02-13 10:54 - Fixed missing detection on trained single-class model path: ClientAI decoder now supports 5-channel YOLO outputs (custom one-class exports), class label mapping prioritizes `MT_ball` for `best_cv451`, and added live overlay detect banner (`DETECTED ...`) for clear operator feedback.
+  2026-02-13 10:39 - Prioritized trained ClientAI model selection: `/color` now defaults ClientAI policy/runtime fallbacks to `best_cv451.onnx` so browser startup aligns with trained model instead of generic `yolov8n`.
+  2026-02-13 10:25 - Simplified ClientAI operator mode on `/color`: when `active_mode=client-ai`, viewer now auto-disables Pi Edge-AI YOLO path, locks YOLO toggle OFF, and suppresses Pi infer metric rows to avoid dual-source confusion.
+  2026-02-13 10:18 - Improved ClientAI target quality on `/color`: browser now skips advisory publish when current frame has no detections, preventing `last_target` churn with `top_conf=0.0` and keeping confidence metrics meaningful.
+  2026-02-13 10:12 - Added session-aware ClientAI publish gate on `/color`: browser now polls `/api/session`, skips advisory publish while unarmed (instead of flooding rejects), and exposes local publish counters with explicit unarmed status for stable closed-loop diagnostics.
+  2026-02-13 09:35 - Fixed ClientAI runtime input-size mismatch on `/color`: browser now prefers model-declared input size (or model-name hint `320`) over Pi detector UI imgsz, and auto-recovers from ORT dimension errors by parsing expected size and retrying.
+  2026-02-13 08:48 - Hardened Safari ClientAI runtime startup by explicitly configuring ORT WASM env (`wasmPaths`, `numThreads=1`, `proxy=false`) and added local runtime debug counters/error state in ClientAI status so browser-side infer/publish failures are visible (not masked by server polling).
+  2026-02-13 07:55 - Fixed ClientAI browser decode/runtime path on `/color`: corrected YOLO tensor-dimension parsing (`[1,84,8400]` / `[1,8400,84]`), hardened ORT script-loader retry/ready checks, and surfaced local infer timing when server-side advisory target is absent.
+  2026-02-12 22:51 - Added real browser-side ClientAI runtime loop on `/color` (ORT bootstrap + model manifest load + frame inference + advisory publish) and local overlay fallback for fresh detections so `client-ai` mode shows boxes immediately even when publish is rejected/stale.
+  2026-02-12 22:37 - Fixed ClientAI-mode overlay/runtime confusion on `/color`: metrics header now reflects active mode, ClientAI target snapshot (`/api/vision/client-target/latest`) drives overlay in `client-ai` mode with strict TTL hide, and low-confidence stale-like ghost boxes are suppressed.
+  2026-02-12 21:16 - Fixed infer-metric ownership confusion: bottom panel infer now explicitly remains Pi-runtime (`/vision/state`), while ClientAI infer/model are shown in dedicated rows fed from `/api/clientai`.
+  2026-02-12 21:00 - Enabled automatic ClientAI capability sync on `/color` startup/heartbeat so default policy can promote `active_mode=client-ai` without requiring manual Apply click after service restart.
+  2026-02-12 20:51 - Added explicit metrics-source labeling in `/color`: bottom panel header now renders `Vision/Stream Metrics - Pi` or `- ClientAI`, and infer-label includes source to prevent confusion between Pi edge inference and browser ClientAI latency.
+  2026-02-12 19:58 - Hardened `/color` video-resolution dial sync: added startup/post-apply multi-pass `/video/config` re-sync and visibility/focus refresh so selector state tracks persisted backend profile reliably (prevents stale 640/960 display races in Safari).
+  2026-02-12 19:41 - Added ClientAI policy/status wiring to original `/color` layout (`/api/clientai`): mode apply/auto controls and live requested/active/fallback/provider/model/infer/publish counters.
   2026-02-12 17:42 - Added post-load video-profile resync timers (`+1.2s`, `+4s`) so Safari refresh reliably reflects backend `/video/config` persisted profile even if initial fetch races service restart/cache.
   2026-02-12 17:33 - Added auto stream-refresh trigger after video-profile apply: emits `robotdog-video-profile-applied` event so live WebRTC path re-negotiates and new resolution takes effect without manual page refresh.
   2026-02-12 17:23 - Added publisher-apply aware video-profile status messaging: `/video/config` now reports persisted profile + publisher restart result so operators know whether WebRTC resolution switched immediately or needs manual intervention.
@@ -122,6 +144,31 @@ const visionAutoDegradeEl = document.getElementById('vision-auto-degrade');
 const visionConfigApplyEl = document.getElementById('vision-config-apply');
 const visionConfigReloadEl = document.getElementById('vision-config-reload');
 const visionConfigStatusEl = document.getElementById('vision-config-status');
+const clientAiModeEl = document.getElementById('clientai-mode');
+const clientAiApplyEl = document.getElementById('clientai-apply');
+const clientAiAutoEl = document.getElementById('clientai-auto');
+const clientAiStatusEl = document.getElementById('clientai-status');
+const clientAiRequestedEl = document.getElementById('clientai-requested');
+const clientAiActiveEl = document.getElementById('clientai-active');
+const clientAiFallbackEl = document.getElementById('clientai-fallback');
+const clientAiProviderEl = document.getElementById('clientai-provider');
+const clientAiModelChoiceEl = document.getElementById('clientai-model-choice');
+const clientAiModelEl = document.getElementById('clientai-model');
+const clientAiInferMsEl = document.getElementById('clientai-infer-ms');
+const clientAiPublishCountsEl = document.getElementById('clientai-publish-counts');
+const debugDetectEnableEl = document.getElementById('debug-detect-enable');
+const debugRawConfEl = document.getElementById('debug-raw-conf');
+const debugIouNmsEl = document.getElementById('debug-iou-nms');
+const debugMaxDetEl = document.getElementById('debug-max-det');
+const debugLogConsoleEl = document.getElementById('debug-log-console');
+const debugLogPanelEl = document.getElementById('debug-log-panel');
+const debugHeuristicsEnableEl = document.getElementById('debug-heuristics-enable');
+const debugRoiEnableEl = document.getElementById('debug-roi-enable');
+const debugRoiGateYEl = document.getElementById('debug-roi-gate-y');
+const debugSizeEnableEl = document.getElementById('debug-size-enable');
+const debugMinAreaEl = document.getElementById('debug-min-area');
+const debugMaxAreaEl = document.getElementById('debug-max-area');
+const debugDetectLogEl = document.getElementById('debug-detect-log');
 const vmStreamFpsEl = document.getElementById('vm-stream-fps');
 const vmMinFpsEl = document.getElementById('vm-min-fps');
 const vmKpiStatusEl = document.getElementById('vm-kpi-status');
@@ -139,11 +186,16 @@ const vmDetFpsEl = document.getElementById('vm-det-fps');
 const vmInferMsEl = document.getElementById('vm-infer-ms');
 const vmInferKeyEl = document.getElementById('vm-infer-key');
 const vmInferModelEl = document.getElementById('vm-infer-model');
+const vmClientAiInferMsEl = document.getElementById('vm-clientai-infer-ms');
+const vmClientAiModelEl = document.getElementById('vm-clientai-model');
 const vmVisionHealthEl = document.getElementById('vm-vision-health');
 const vmVisionErrorEl = document.getElementById('vm-vision-error');
+const vmHeaderEl = document.getElementById('vm-header');
+const visionTargetOverlayEl = document.getElementById('vision-target-overlay');
 const visionTargetBoxEl = document.getElementById('vision-target-box');
 const visionTargetLabelEl = document.getElementById('vision-target-label');
 const liveViewEl = document.getElementById('live-view');
+const clientAiDetectBannerEl = document.createElement('div');
 const liveStatusEl = document.getElementById('liveStatus');
 const streamAlertTextEl = document.getElementById('stream-alert-text');
 const streamAlertSubEl = document.getElementById('stream-alert-sub');
@@ -174,6 +226,261 @@ const STALL_CLEAR_TICKS = 2;
 const rawImu = { roll: null, pitch: null, yaw: null };
 const modifiedImu = { roll: null, pitch: null, yaw: null };
 let latestVisionState = null;
+let clientAiStatus = null;
+let latestClientTargetSnapshot = null;
+let latestClientAiLocalDetections = [];
+let clientAiEdgeDisableInFlight = false;
+const VIDEO_PROFILE_RESYNC_DELAYS_MS = [0, 1200, 4000, 9000];
+let videoProfileResyncTimers = [];
+const TARGET_RENDER_MIN_CONF = 0.60;
+const CLIENT_TARGET_MAX_AGE_MS = 1500;
+const CLIENTAI_LOCAL_TARGET_MAX_AGE_MS = 1200;
+const CLIENTAI_LOCAL_RENDER_MIN_CONF = 0.35;
+const CLIENTAI_ALLOWED_LABELS = new Set(['MT_ball', 'Yolo_Sport_Ball', 'Dog', 'Person', 'Cat']);
+const CLIENTAI_ORT_CDN = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js';
+const CLIENTAI_ORT_FALLBACK = 'https://unpkg.com/onnxruntime-web/dist/ort.min.js';
+const CLIENTAI_PREFERRED_MODEL = 'best_cv451.onnx';
+const CLIENTAI_YOLO_MODEL_FALLBACK = 'yolov8n_cv451.onnx';
+const CLIENTAI_MODEL_CHOICE_BEST = 'best';
+const CLIENTAI_MODEL_CHOICE_YOLO = 'yolov8n';
+const CLIENTAI_MODEL_CHOICE_MIX = 'mix';
+const CLIENTAI_MAX_RENDER_CLASSES = 3;
+const CLIENTAI_STABLE_CONF_LABEL = 'MT_ball';
+const CLIENTAI_STABLE_LOCK_CONF = 0.75;
+const CLIENTAI_STABLE_MAX_DROP = 0.12;
+const CLIENTAI_STABLE_MAX_AGE_MS = 1500;
+const CLIENTAI_STABLE_MIN_IOU = 0.12;
+const CLIENTAI_MT_BALL_MIN_AREA = 0.008;
+const CLIENTAI_CLASS_SWITCH_CONFIRM_FRAMES = 2;
+const CLIENTAI_CLASS_SWITCH_HOLD_MS = 1200;
+const CLIENTAI_DEBUG_RAW_CONF_DEFAULT = 0.10;
+const CLIENTAI_DEBUG_NMS_DEFAULT = 0.45;
+const CLIENTAI_DEBUG_MAXDET_DEFAULT = 60;
+const CLIENTAI_DEBUG_LOG_TOPK = 10;
+const CLIENTAI_BOX_STYLE = {
+  MT_ball: { border: 'rgba(36,255,156,0.92)', labelBg: 'rgba(36,255,156,0.92)', labelFg: '#071216' },
+  Yolo_Sport_Ball: { border: 'rgba(255,218,92,0.96)', labelBg: 'rgba(255,218,92,0.96)', labelFg: '#231a00' },
+  Dog: { border: 'rgba(91,212,255,0.96)', labelBg: 'rgba(91,212,255,0.96)', labelFg: '#03131a' },
+  Person: { border: 'rgba(255,160,92,0.96)', labelBg: 'rgba(255,160,92,0.96)', labelFg: '#241103' },
+  Cat: { border: 'rgba(246,131,247,0.96)', labelBg: 'rgba(246,131,247,0.96)', labelFg: '#250629' },
+  _default: { border: 'rgba(146,189,255,0.96)', labelBg: 'rgba(146,189,255,0.96)', labelFg: '#0a1223' },
+};
+const clientAiRuntime = {
+  running: false,
+  manifest: null,
+  modelReady: false,
+  modelChoice: CLIENTAI_MODEL_CHOICE_BEST,
+  inferSession: null,
+  inferSessionBest: null,
+  inferSessionYolo: null,
+  modelName: '',
+  modelNameBest: '',
+  modelNameYolo: '',
+  provider: 'unknown',
+  frameId: 0,
+  inferEveryN: 8,
+  inferMsAvg: null,
+  inputSize: 256,
+  inputSizeBest: 256,
+  inputSizeYolo: 256,
+  tickBusy: false,
+  lastInferMs: null,
+  inferAttempts: 0,
+  inferSuccess: 0,
+  postOk: 0,
+  postFail: 0,
+  postSkipUnarmed: 0,
+  lastError: '',
+  ortScriptSrc: '',
+  sessionArmed: false,
+  sessionKnown: false,
+  stableByLabel: {},
+  classSwitchState: {
+    dominantLabel: '',
+    pendingLabel: '',
+    pendingCount: 0,
+    holdMtBall: null,
+  },
+  debug: {
+    enabled: false,
+    rawConfThres: CLIENTAI_DEBUG_RAW_CONF_DEFAULT,
+    iouNms: CLIENTAI_DEBUG_NMS_DEFAULT,
+    maxDet: CLIENTAI_DEBUG_MAXDET_DEFAULT,
+    logConsole: true,
+    logPanel: false,
+    heuristicsEnabled: false,
+    roiGateEnabled: false,
+    roiGateY: 0.45,
+    sizeGateEnabled: false,
+    minArea: CLIENTAI_MT_BALL_MIN_AREA,
+    maxArea: 0.30,
+    rawDetections: [],
+  },
+};
+const clientAiSampleCanvas = document.createElement('canvas');
+const clientAiSampleCtx = clientAiSampleCanvas.getContext('2d', { willReadFrequently: true });
+const clientAiLumaCanvas = document.createElement('canvas');
+const clientAiLumaCtx = clientAiLumaCanvas.getContext('2d', { willReadFrequently: true });
+
+if (liveViewEl) {
+  clientAiDetectBannerEl.id = 'clientai-detect-banner';
+  clientAiDetectBannerEl.style.position = 'absolute';
+  clientAiDetectBannerEl.style.left = '12px';
+  clientAiDetectBannerEl.style.bottom = '12px';
+  clientAiDetectBannerEl.style.padding = '4px 8px';
+  clientAiDetectBannerEl.style.border = '1px solid rgba(0,255,170,0.65)';
+  clientAiDetectBannerEl.style.borderRadius = '8px';
+  clientAiDetectBannerEl.style.background = 'rgba(0,32,24,0.82)';
+  clientAiDetectBannerEl.style.color = '#00ffb5';
+  clientAiDetectBannerEl.style.fontSize = '11px';
+  clientAiDetectBannerEl.style.fontWeight = '700';
+  clientAiDetectBannerEl.style.display = 'none';
+  clientAiDetectBannerEl.style.pointerEvents = 'none';
+  liveViewEl.appendChild(clientAiDetectBannerEl);
+}
+
+function setClientAiDetectBanner(text = '', visible = false) {
+  if (!clientAiDetectBannerEl) return;
+  clientAiDetectBannerEl.textContent = text || '';
+  clientAiDetectBannerEl.style.display = visible ? 'block' : 'none';
+}
+
+function parseDebugFloat(el, fallback, minV, maxV) {
+  const v = Number(el?.value);
+  if (!Number.isFinite(v)) return fallback;
+  return Math.max(minV, Math.min(maxV, v));
+}
+
+function parseDebugInt(el, fallback, minV, maxV) {
+  const v = Math.round(Number(el?.value));
+  if (!Number.isFinite(v)) return fallback;
+  return Math.max(minV, Math.min(maxV, v));
+}
+
+function syncClientAiDebugConfigFromUi() {
+  const dbg = clientAiRuntime.debug;
+  dbg.enabled = String(debugDetectEnableEl?.value || 'off') === 'on';
+  dbg.rawConfThres = parseDebugFloat(debugRawConfEl, CLIENTAI_DEBUG_RAW_CONF_DEFAULT, 0.01, 0.99);
+  dbg.iouNms = parseDebugFloat(debugIouNmsEl, CLIENTAI_DEBUG_NMS_DEFAULT, 0.05, 0.95);
+  dbg.maxDet = parseDebugInt(debugMaxDetEl, CLIENTAI_DEBUG_MAXDET_DEFAULT, 5, 120);
+  dbg.logConsole = String(debugLogConsoleEl?.value || 'on') === 'on';
+  dbg.logPanel = String(debugLogPanelEl?.value || 'off') === 'on';
+  dbg.heuristicsEnabled = String(debugHeuristicsEnableEl?.value || 'off') === 'on';
+  dbg.roiGateEnabled = String(debugRoiEnableEl?.value || 'off') === 'on';
+  dbg.roiGateY = parseDebugFloat(debugRoiGateYEl, 0.45, 0.0, 1.0);
+  dbg.sizeGateEnabled = String(debugSizeEnableEl?.value || 'off') === 'on';
+  dbg.minArea = parseDebugFloat(debugMinAreaEl, CLIENTAI_MT_BALL_MIN_AREA, 0.0001, 1.0);
+  dbg.maxArea = parseDebugFloat(debugMaxAreaEl, 0.30, 0.001, 1.0);
+  if (dbg.maxArea < dbg.minArea) {
+    const tmp = dbg.maxArea;
+    dbg.maxArea = dbg.minArea;
+    dbg.minArea = tmp;
+  }
+  if (debugDetectLogEl) debugDetectLogEl.style.display = (dbg.enabled && dbg.logPanel) ? 'block' : 'none';
+}
+
+function hideDebugRawOverlay() {
+  if (!visionTargetOverlayEl) return;
+  const extras = visionTargetOverlayEl.querySelectorAll('.vision-target-debug-box');
+  extras.forEach((el) => el.remove());
+}
+
+function debugClassColor(label) {
+  const text = String(label || 'cls');
+  let hash = 0;
+  for (let i = 0; i < text.length; i += 1) hash = ((hash * 31) + text.charCodeAt(i)) >>> 0;
+  const h = hash % 360;
+  return `hsl(${h} 92% 62%)`;
+}
+
+function renderDebugRawDetections(rawDetections = []) {
+  hideDebugRawOverlay();
+  if (!visionTargetOverlayEl) return;
+  const dbg = clientAiRuntime.debug;
+  if (!dbg.enabled) return;
+  const list = Array.isArray(rawDetections) ? rawDetections : [];
+  list.slice(0, dbg.maxDet).forEach((det, idx) => {
+    const box = document.createElement('div');
+    box.className = 'vision-target-debug-box';
+    box.style.position = 'absolute';
+    box.style.left = `${clamp01(det.x1) * 100}%`;
+    box.style.top = `${clamp01(det.y1) * 100}%`;
+    box.style.width = `${Math.max(0, clamp01(det.x2) - clamp01(det.x1)) * 100}%`;
+    box.style.height = `${Math.max(0, clamp01(det.y2) - clamp01(det.y1)) * 100}%`;
+    box.style.border = `1px dashed ${debugClassColor(det.label)}`;
+    box.style.borderRadius = '3px';
+    box.style.boxShadow = '0 0 0 1px rgba(0,0,0,.35) inset';
+    box.style.pointerEvents = 'none';
+    box.style.opacity = idx < 10 ? '0.95' : '0.45';
+    const labelEl = document.createElement('div');
+    const area = Math.max(0, (Number(det.x2 || 0) - Number(det.x1 || 0)) * (Number(det.y2 || 0) - Number(det.y1 || 0));
+    const cx = (Number(det.x1 || 0) + Number(det.x2 || 0)) / 2;
+    const cy = (Number(det.y1 || 0) + Number(det.y2 || 0)) / 2;
+    labelEl.textContent = `${det.label} ${Number(det.conf || 0).toFixed(2)} a=${area.toFixed(3)} c=(${cx.toFixed(2)},${cy.toFixed(2)})`;
+    labelEl.style.position = 'absolute';
+    labelEl.style.top = '-19px';
+    labelEl.style.left = '0';
+    labelEl.style.fontSize = '10px';
+    labelEl.style.padding = '1px 4px';
+    labelEl.style.borderRadius = '3px';
+    labelEl.style.whiteSpace = 'nowrap';
+    labelEl.style.background = 'rgba(0,0,0,.68)';
+    labelEl.style.color = '#f1f6ff';
+    box.appendChild(labelEl);
+    visionTargetOverlayEl.appendChild(box);
+  });
+}
+
+function resolveClientAiModelChoice(choiceLike) {
+  const value = String(choiceLike || '').trim().toLowerCase();
+  if (value === CLIENTAI_MODEL_CHOICE_MIX) return CLIENTAI_MODEL_CHOICE_MIX;
+  if (value === CLIENTAI_MODEL_CHOICE_YOLO) return CLIENTAI_MODEL_CHOICE_YOLO;
+  return CLIENTAI_MODEL_CHOICE_BEST;
+}
+
+function getClientAiStateModelId() {
+  const choice = resolveClientAiModelChoice(clientAiRuntime.modelChoice);
+  if (choice === CLIENTAI_MODEL_CHOICE_YOLO) {
+    return String(clientAiRuntime.modelNameYolo || CLIENTAI_YOLO_MODEL_FALLBACK);
+  }
+  return String(clientAiRuntime.modelNameBest || CLIENTAI_PREFERRED_MODEL);
+}
+
+function getClientAiDisplayModelLabel() {
+  const choice = resolveClientAiModelChoice(clientAiRuntime.modelChoice);
+  if (choice === CLIENTAI_MODEL_CHOICE_MIX) {
+    const best = String(clientAiRuntime.modelNameBest || CLIENTAI_PREFERRED_MODEL);
+    const yolo = String(clientAiRuntime.modelNameYolo || CLIENTAI_YOLO_MODEL_FALLBACK);
+    return `Mix (${best} + ${yolo})`;
+  }
+  if (choice === CLIENTAI_MODEL_CHOICE_YOLO) {
+    return String(clientAiRuntime.modelNameYolo || CLIENTAI_YOLO_MODEL_FALLBACK);
+  }
+  return String(clientAiRuntime.modelNameBest || CLIENTAI_PREFERRED_MODEL);
+}
+
+function clearClientAiModelSessions() {
+  clientAiRuntime.modelReady = false;
+  clientAiRuntime.inferSession = null;
+  clientAiRuntime.inferSessionBest = null;
+  clientAiRuntime.inferSessionYolo = null;
+  clientAiRuntime.modelName = '';
+  clientAiRuntime.modelNameBest = '';
+  clientAiRuntime.modelNameYolo = '';
+  clientAiRuntime.inputSize = 256;
+  clientAiRuntime.inputSizeBest = 256;
+  clientAiRuntime.inputSizeYolo = 256;
+}
+
+function refreshVisionMetricsHeader() {
+  if (!vmHeaderEl) return;
+  const activeMode = String(clientAiStatus?.active_mode || '').toLowerCase();
+  if (activeMode === 'client-ai') {
+    vmHeaderEl.textContent = 'Vision/Stream Metrics - ClientAI';
+    return;
+  }
+  vmHeaderEl.textContent = 'Vision/Stream Metrics';
+}
 
 function renderTopTelemetryLine() {
   if (!telemetryTopEl) return;
@@ -887,6 +1194,25 @@ function syncVideoProfileUi(profile) {
     videoProfileEl.appendChild(opt);
   }
   videoProfileEl.value = value;
+  videoProfileEl.dataset.serverProfile = value;
+}
+
+function clearVideoProfileResyncTimers() {
+  for (const id of videoProfileResyncTimers) {
+    clearTimeout(id);
+  }
+  videoProfileResyncTimers = [];
+}
+
+function scheduleVideoProfileResync() {
+  if (!videoProfileEl) return;
+  clearVideoProfileResyncTimers();
+  for (const delay of VIDEO_PROFILE_RESYNC_DELAYS_MS) {
+    const timerId = setTimeout(() => {
+      fetchVideoConfig();
+    }, delay);
+    videoProfileResyncTimers.push(timerId);
+  }
 }
 
 async function fetchVisionConfig() {
@@ -944,6 +1270,7 @@ async function applyVideoConfig() {
         note = ' (saved; apply on next publisher restart/power cycle)';
       }
       setVisionConfigStatus(`Applied: video=${appliedProfile}${note}`);
+      scheduleVideoProfileResync();
       setTimeout(() => {
         window.dispatchEvent(new CustomEvent('robotdog-video-profile-applied', {
           detail: {
@@ -1003,8 +1330,206 @@ function bindVisionConfigControls() {
   }
 }
 
+function clientAiApiBase() {
+  const proto = window.location.protocol === 'https:' ? 'https:' : 'http:';
+  const host = window.location.hostname || '192.168.0.32';
+  return `${proto}//${host}:8090`;
+}
+
+function detectClientAiCapability() {
+  const hasWebGpu = !!(navigator && navigator.gpu);
+  const hasWasm = typeof WebAssembly === 'object';
+  return {
+    client_ai_capable: hasWebGpu || hasWasm,
+    provider: hasWebGpu ? 'webgpu' : (hasWasm ? 'wasm' : 'unknown'),
+  };
+}
+
+function setClientAiStatus(msg, isError = false) {
+  if (!clientAiStatusEl) return;
+  clientAiStatusEl.textContent = msg || '--';
+  clientAiStatusEl.style.color = isError ? '#ff8080' : '#9fb1c4';
+}
+
+function renderClientAiStatus(st) {
+  if (!st) return;
+  clientAiStatus = st;
+  refreshVisionMetricsHeader();
+  if (clientAiRequestedEl) clientAiRequestedEl.value = String(st.requested_mode || '--');
+  if (clientAiActiveEl) clientAiActiveEl.value = String(st.active_mode || '--');
+  if (clientAiFallbackEl) clientAiFallbackEl.value = String(st.fallback_reason || 'none');
+  if (clientAiProviderEl) clientAiProviderEl.value = String(st.provider || '--');
+  if (clientAiModelEl) clientAiModelEl.value = getClientAiDisplayModelLabel();
+  const serverInferMs = Number(st?.last_target?.infer_ms);
+  const inferMs = Number.isFinite(serverInferMs) ? serverInferMs : Number(clientAiRuntime.lastInferMs);
+  if (clientAiInferMsEl) clientAiInferMsEl.value = Number.isFinite(inferMs) ? inferMs.toFixed(1) : '--';
+  if (vmClientAiInferMsEl) vmClientAiInferMsEl.textContent = Number.isFinite(inferMs) ? inferMs.toFixed(1) : '--';
+  if (vmClientAiModelEl) vmClientAiModelEl.textContent = getClientAiDisplayModelLabel();
+  const accepted = Number(st.accepted_count || 0);
+  const rejected = Number(st.rejected_count || 0);
+  if (clientAiPublishCountsEl) {
+    clientAiPublishCountsEl.value = `accepted:${accepted} / rejected:${rejected} / local_skip:${clientAiRuntime.postSkipUnarmed}`;
+  }
+  if (clientAiModeEl && st.requested_mode) clientAiModeEl.value = String(st.requested_mode);
+  if (clientAiModelChoiceEl) clientAiModelChoiceEl.value = resolveClientAiModelChoice(clientAiRuntime.modelChoice);
+  const modeText = st.manual_override ? 'manual' : 'auto';
+  const err = clientAiRuntime.lastError ? `, localErr=${clientAiRuntime.lastError}` : '';
+  const armedText = clientAiRuntime.sessionKnown
+    ? (clientAiRuntime.sessionArmed ? 'armed' : 'unarmed')
+    : 'session?';
+  const lastReject = String(st.last_reject || '').trim();
+  const rejectReason = lastReject || (rejected > 0 ? 'unknown' : 'none');
+  const skipHint = clientAiRuntime.sessionKnown && !clientAiRuntime.sessionArmed
+    ? ', unarmed -> local_skip increments (no server post)'
+    : '';
+  setClientAiStatus(
+    `ClientAI ${st.active_mode || '--'} (${modeText}), ${armedText}, provider=${st.provider || '--'}, capable=${st.client_ai_capable ? 'yes' : 'no'}, local infer=${clientAiRuntime.inferSuccess}/${clientAiRuntime.inferAttempts}, local post ok/fail=${clientAiRuntime.postOk}/${clientAiRuntime.postFail}, local_skip=${clientAiRuntime.postSkipUnarmed}, server accepted/rejected=${accepted}/${rejected}, server_last_reject=${rejectReason}${skipHint}${err}`,
+    !!clientAiRuntime.lastError,
+  );
+}
+
+async function pollClientSessionStatus() {
+  try {
+    const res = await fetch(`${clientAiApiBase()}/api/session`, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data?.ok) throw new Error(data?.error || 'session_status_error');
+    clientAiRuntime.sessionArmed = !!data.armed;
+    clientAiRuntime.sessionKnown = true;
+  } catch (e) {
+    clientAiRuntime.sessionKnown = false;
+  }
+}
+
+async function pollClientAiStatus() {
+  if (!clientAiStatusEl) return;
+  try {
+    const res = await fetch(`${clientAiApiBase()}/api/clientai`, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data?.ok) throw new Error(data?.error || 'clientai status error');
+    renderClientAiStatus(data);
+  } catch (e) {
+    setClientAiStatus('ClientAI status unavailable', true);
+  }
+}
+
+async function pollClientTargetLatest() {
+  try {
+    const res = await fetch(`${clientAiApiBase()}/api/vision/client-target/latest`, { cache: 'no-store' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (!data?.ok) throw new Error(data?.error || 'target snapshot error');
+    latestClientTargetSnapshot = data;
+    renderVisionTargetOverlay(latestVisionState);
+  } catch (e) {
+    latestClientTargetSnapshot = null;
+    renderVisionTargetOverlay(latestVisionState);
+  }
+}
+
+async function postClientAiState(patch = {}) {
+  const capability = detectClientAiCapability();
+  const body = {
+    ...capability,
+    model_id: getClientAiStateModelId(),
+    ...patch,
+  };
+  const res = await fetch(`${clientAiApiBase()}/api/clientai`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data?.ok) {
+    throw new Error(data?.error || `HTTP ${res.status}`);
+  }
+  renderClientAiStatus(data);
+}
+
+function bindClientAiControls() {
+  if (!clientAiStatusEl) return;
+  if (clientAiModelChoiceEl) {
+    clientAiModelChoiceEl.addEventListener('change', async () => {
+      clientAiRuntime.modelChoice = resolveClientAiModelChoice(clientAiModelChoiceEl.value);
+      latestClientAiLocalDetections = [];
+      clearClientAiModelSessions();
+      try {
+        await ensureClientAiModelReady();
+      } catch (e) {
+        clientAiRuntime.lastError = String(e?.message || e || 'model_switch_failed');
+      }
+      renderVisionTargetOverlay(latestVisionState);
+    });
+  }
+  if (clientAiApplyEl) {
+    clientAiApplyEl.addEventListener('click', async () => {
+      try {
+        await postClientAiState({
+          mode: String(clientAiModeEl?.value || 'edge-ai'),
+          model_id: getClientAiStateModelId(),
+        });
+      } catch (e) {
+        setClientAiStatus(`ClientAI apply failed: ${e.message || e}`, true);
+      }
+    });
+  }
+  if (clientAiAutoEl) {
+    clientAiAutoEl.addEventListener('click', async () => {
+      try {
+        await postClientAiState({ action: 'reset_auto' });
+      } catch (e) {
+        setClientAiStatus(`ClientAI auto failed: ${e.message || e}`, true);
+      }
+    });
+  }
+}
+
+function bindClientAiDebugControls() {
+  const els = [
+    debugDetectEnableEl,
+    debugRawConfEl,
+    debugIouNmsEl,
+    debugMaxDetEl,
+    debugLogConsoleEl,
+    debugLogPanelEl,
+    debugHeuristicsEnableEl,
+    debugRoiEnableEl,
+    debugRoiGateYEl,
+    debugSizeEnableEl,
+    debugMinAreaEl,
+    debugMaxAreaEl,
+  ];
+  els.forEach((el) => {
+    if (!el) return;
+    el.addEventListener('change', () => {
+      syncClientAiDebugConfigFromUi();
+      if (!clientAiRuntime.debug.enabled) {
+        hideDebugRawOverlay();
+      }
+    });
+    el.addEventListener('input', () => {
+      syncClientAiDebugConfigFromUi();
+    });
+  });
+  syncClientAiDebugConfigFromUi();
+}
+
+let lastClientAiCapabilitySyncMs = 0;
+async function syncClientAiCapabilityAuto() {
+  const now = Date.now();
+  if ((now - lastClientAiCapabilitySyncMs) < 3000) return;
+  lastClientAiCapabilitySyncMs = now;
+  try {
+    await postClientAiState({});
+  } catch (e) {
+    // Non-fatal: polling path still updates display and fallback status.
+  }
+}
+
 function renderVisionMetrics(metrics) {
   if (!metrics) return;
+  refreshVisionMetricsHeader();
   if (vmStreamFpsEl) vmStreamFpsEl.textContent = Number.isFinite(metrics.client_stream_fps) ? Number(metrics.client_stream_fps).toFixed(1) : '--';
   if (vmMinFpsEl) vmMinFpsEl.textContent = Number.isFinite(metrics.min_stream_fps) ? Number(metrics.min_stream_fps).toFixed(1) : '--';
   if (vmKpiStatusEl) vmKpiStatusEl.textContent = String(metrics.kpi_status || '--');
@@ -1021,29 +1546,46 @@ function renderVisionMetrics(metrics) {
 
 function syncVisionButtons(state) {
   if (!state) return;
+  const activeMode = String(clientAiStatus?.active_mode || '').toLowerCase();
+  const clientMode = activeMode === 'client-ai';
   const yoloOn = !!state.yolo_enabled;
+  const forcedYoloOn = clientMode ? false : yoloOn;
   const trackingOn = !!state.tracking_enabled;
+  if (clientMode && yoloOn && !clientAiEdgeDisableInFlight) {
+    clientAiEdgeDisableInFlight = true;
+    sendVisionStateAction('toggle_yolo').finally(() => {
+      clientAiEdgeDisableInFlight = false;
+    });
+  }
   if (toggleYoloEl) {
-    toggleYoloEl.dataset.state = yoloOn ? 'on' : 'off';
-    toggleYoloEl.textContent = yoloOn ? 'Yolo Vision ON' : 'Yolo Vision OFF';
-    toggleYoloEl.classList.toggle('green', yoloOn);
+    toggleYoloEl.dataset.state = forcedYoloOn ? 'on' : 'off';
+    toggleYoloEl.textContent = clientMode ? 'Vision AI LOCKED OFF' : (forcedYoloOn ? 'Yolo Vision ON' : 'Yolo Vision OFF');
+    toggleYoloEl.classList.toggle('green', forcedYoloOn);
     toggleYoloEl.classList.remove('placeholder');
-    toggleYoloEl.disabled = false;
+    toggleYoloEl.disabled = clientMode;
   }
   if (toggleTrackingEl) {
-    toggleTrackingEl.dataset.state = trackingOn ? 'on' : 'off';
-    toggleTrackingEl.textContent = trackingOn ? 'Tracking ON' : 'Tracking OFF';
-    toggleTrackingEl.classList.toggle('blue', trackingOn);
+    const trkOn = clientMode ? false : trackingOn;
+    toggleTrackingEl.dataset.state = trkOn ? 'on' : 'off';
+    toggleTrackingEl.textContent = trkOn ? 'Tracking ON' : 'Tracking OFF';
+    toggleTrackingEl.classList.toggle('blue', trkOn);
     toggleTrackingEl.classList.remove('placeholder');
-    toggleTrackingEl.disabled = !yoloOn;
+    toggleTrackingEl.disabled = clientMode || !forcedYoloOn;
   }
   if (vmVisionModeEl) vmVisionModeEl.textContent = String(state.state || '--');
   if (vmTargetCountEl) vmTargetCountEl.textContent = String(state.target_count ?? '--');
   if (vmDetFpsEl) vmDetFpsEl.textContent = Number.isFinite(state.det_fps) ? Number(state.det_fps).toFixed(1) : '--';
   const inferModel = inferModelAlias(state);
-  if (vmInferKeyEl) vmInferKeyEl.textContent = `Infer (ms) "${inferModel}" model`;
-  if (vmInferModelEl) vmInferModelEl.textContent = inferModel;
-  if (vmInferMsEl) vmInferMsEl.textContent = Number.isFinite(state.infer_ms) ? Number(state.infer_ms).toFixed(1) : '--';
+  if (vmInferKeyEl) vmInferKeyEl.textContent = clientMode ? 'ClientAI Infer (ms)' : 'Infer (ms)';
+  if (clientMode) {
+    const serverInferMs = Number(clientAiStatus?.last_target?.infer_ms);
+    const clientInferMs = Number.isFinite(serverInferMs) ? serverInferMs : Number(clientAiRuntime.lastInferMs);
+    if (vmInferModelEl) vmInferModelEl.textContent = getClientAiDisplayModelLabel();
+    if (vmInferMsEl) vmInferMsEl.textContent = Number.isFinite(clientInferMs) ? clientInferMs.toFixed(1) : '--';
+  } else {
+    if (vmInferModelEl) vmInferModelEl.textContent = inferModel;
+    if (vmInferMsEl) vmInferMsEl.textContent = Number.isFinite(state.infer_ms) ? Number(state.infer_ms).toFixed(1) : '--';
+  }
   if (vmVisionHealthEl) vmVisionHealthEl.textContent = String(state.health || '--');
   if (vmVisionErrorEl) vmVisionErrorEl.textContent = String(state.error || '--');
   renderVisionTargetOverlay(state);
@@ -1063,16 +1605,167 @@ function clamp01(v) {
   return Math.max(0, Math.min(1, Number(v) || 0));
 }
 
+function normalizeClientAiLabel(labelLike, source = '') {
+  const raw = String(labelLike || '').trim().toLowerCase().replace(/[_-]+/g, ' ');
+  const src = String(source || '').trim().toLowerCase();
+  if (raw === 'mt ball' || raw === 'mt_ball' || raw === 'mt-ball') return 'MT_ball';
+  if (raw === 'sports ball' || raw === 'sport ball' || raw === 'sport_ball' || raw === 'sport-ball') return 'Yolo_Sport_Ball';
+  if (raw === 'dog') return 'Dog';
+  if (raw === 'person') return 'Person';
+  if (raw === 'cat') return 'Cat';
+  if (src === 'mt') return 'MT_ball';
+  if (src === 'yolo' && raw === 'ball') return 'Yolo_Sport_Ball';
+  return String(labelLike || 'target');
+}
+
+function clientAiClassPriority(label) {
+  const norm = normalizeClientAiLabel(label);
+  if (norm === 'MT_ball') return 0;
+  if (norm === 'Yolo_Sport_Ball') return 1;
+  if (norm === 'Dog') return 2;
+  return 9;
+}
+
+function styleVisionBox(boxEl, labelEl, label) {
+  const style = CLIENTAI_BOX_STYLE[normalizeClientAiLabel(label)] || CLIENTAI_BOX_STYLE._default;
+  boxEl.style.border = `2px solid ${style.border}`;
+  if (labelEl) {
+    labelEl.style.background = style.labelBg;
+    labelEl.style.color = style.labelFg;
+  }
+}
+
+function hideVisionTargetOverlay() {
+  if (visionTargetBoxEl) visionTargetBoxEl.style.display = 'none';
+  if (visionTargetOverlayEl) {
+    const extras = visionTargetOverlayEl.querySelectorAll('.vision-target-box-extra');
+    extras.forEach((el) => el.remove());
+  }
+}
+
+function getVisionBoxPair(index) {
+  if (index === 0) {
+    return { boxEl: visionTargetBoxEl, labelEl: visionTargetLabelEl };
+  }
+  if (!visionTargetOverlayEl) return { boxEl: null, labelEl: null };
+  const id = `vision-target-box-extra-${index}`;
+  let boxEl = visionTargetOverlayEl.querySelector(`#${id}`);
+  let labelEl = boxEl ? boxEl.querySelector('.vision-target-label-extra') : null;
+  if (!boxEl) {
+    boxEl = document.createElement('div');
+    boxEl.id = id;
+    boxEl.className = 'vision-target-box-extra';
+    boxEl.style.position = 'absolute';
+    boxEl.style.boxShadow = '0 0 0 1px rgba(0,0,0,.35) inset';
+    boxEl.style.borderRadius = '4px';
+    boxEl.style.display = 'none';
+    labelEl = document.createElement('div');
+    labelEl.className = 'vision-target-label-extra';
+    labelEl.style.position = 'absolute';
+    labelEl.style.top = '-22px';
+    labelEl.style.left = '0';
+    labelEl.style.fontSize = '12px';
+    labelEl.style.borderRadius = '4px';
+    labelEl.style.padding = '2px 6px';
+    labelEl.style.whiteSpace = 'nowrap';
+    boxEl.appendChild(labelEl);
+    visionTargetOverlayEl.appendChild(boxEl);
+  }
+  return { boxEl, labelEl };
+}
+
+function normalizeRenderDetections(detections = []) {
+  const out = [];
+  detections.forEach((item) => {
+    const conf = Number(item?.conf);
+    if (!Number.isFinite(conf)) return;
+    const x1 = clamp01(item?.x1);
+    const y1 = clamp01(item?.y1);
+    const x2 = clamp01(item?.x2);
+    const y2 = clamp01(item?.y2);
+    const w = clamp01(x2 - x1);
+    const h = clamp01(y2 - y1);
+    if (w <= 0 || h <= 0) return;
+    const label = normalizeClientAiLabel(item?.label, item?.source);
+    out.push({
+      label,
+      conf: Math.max(0, Math.min(1, conf)),
+      x1,
+      y1,
+      x2,
+      y2,
+      source: String(item?.source || ''),
+    });
+  });
+  return out;
+}
+
+function renderClientAiDetectionsOverlay(detections, tag) {
+  const norm = normalizeRenderDetections(detections).slice(0, CLIENTAI_MAX_RENDER_CLASSES);
+  hideVisionTargetOverlay();
+  if (norm.length === 0) return false;
+  norm.forEach((det, idx) => {
+    const pair = getVisionBoxPair(idx);
+    if (!pair.boxEl) return;
+    pair.boxEl.style.display = 'block';
+    pair.boxEl.style.left = `${det.x1 * 100}%`;
+    pair.boxEl.style.top = `${det.y1 * 100}%`;
+    pair.boxEl.style.width = `${(det.x2 - det.x1) * 100}%`;
+    pair.boxEl.style.height = `${(det.y2 - det.y1) * 100}%`;
+    styleVisionBox(pair.boxEl, pair.labelEl, det.label);
+    if (pair.labelEl) {
+      pair.labelEl.textContent = `${det.label} ${det.conf.toFixed(2)} ${tag}`;
+    }
+  });
+  const top = norm[0];
+  setClientAiDetectBanner(`DETECTED: ${top.label} ${top.conf.toFixed(2)} ${tag}`, true);
+  return true;
+}
+
 function renderVisionTargetOverlay(state) {
   if (!visionTargetBoxEl) return;
+  if (!clientAiRuntime.debug.enabled) {
+    hideDebugRawOverlay();
+  }
+  const activeMode = String(clientAiStatus?.active_mode || '').toLowerCase();
+  if (activeMode === 'client-ai') {
+    const consumer = latestClientTargetSnapshot?.tracking_consumer;
+    const target = consumer?.target;
+    const eligible = !!consumer?.eligible && !!target;
+    const tsClientMs = Number(target?.ts_client_ms || 0);
+    const ageMs = Date.now() - tsClientMs;
+    const targetDetections = Array.isArray(target?.detections) ? target.detections : (target?.top_detection ? [target.top_detection] : []);
+    const conf = Number(target?.top_detection?.conf);
+    const fresh = Number.isFinite(ageMs) && ageMs >= -500 && ageMs <= CLIENT_TARGET_MAX_AGE_MS;
+    if (eligible && fresh && Number.isFinite(conf) && conf >= TARGET_RENDER_MIN_CONF) {
+      if (renderClientAiDetectionsOverlay(targetDetections, '[client]')) return;
+    }
+    const localTop = latestClientAiLocalDetections[0];
+    const localAgeMs = localTop ? (Date.now() - Number(localTop.ts_client_ms || 0)) : Number.POSITIVE_INFINITY;
+    const localFresh = Number.isFinite(localAgeMs) && localAgeMs >= -500 && localAgeMs <= CLIENTAI_LOCAL_TARGET_MAX_AGE_MS;
+    const localConf = Number(localTop?.conf);
+    if (!localTop || !localFresh || !Number.isFinite(localConf) || localConf < CLIENTAI_LOCAL_RENDER_MIN_CONF) {
+      hideVisionTargetOverlay();
+      setClientAiDetectBanner('SEARCHING: no confident target', true);
+      return;
+    }
+    renderClientAiDetectionsOverlay(latestClientAiLocalDetections, '[local]');
+    return;
+  }
+  setClientAiDetectBanner('', false);
   if (state?.stale || String(state?.state || '') === 'stale') {
-    visionTargetBoxEl.style.display = 'none';
+    hideVisionTargetOverlay();
     return;
   }
   const targets = Array.isArray(state?.targets) ? state.targets : [];
   const first = targets.length > 0 ? targets[0] : null;
   if (!first || !Array.isArray(first.bbox) || first.bbox.length < 4) {
-    visionTargetBoxEl.style.display = 'none';
+    hideVisionTargetOverlay();
+    return;
+  }
+  const firstConf = Number(first.conf);
+  if (!Number.isFinite(firstConf) || firstConf < TARGET_RENDER_MIN_CONF) {
+    hideVisionTargetOverlay();
     return;
   }
   const nx = clamp01(first.bbox[0]);
@@ -1083,7 +1776,9 @@ function renderVisionTargetOverlay(state) {
   const yPct = ny * 100;
   const wPct = nw * 100;
   const hPct = nh * 100;
+  hideVisionTargetOverlay();
   visionTargetBoxEl.style.display = 'block';
+  styleVisionBox(visionTargetBoxEl, visionTargetLabelEl, 'MT_ball');
   visionTargetBoxEl.style.left = `${xPct}%`;
   visionTargetBoxEl.style.top = `${yPct}%`;
   visionTargetBoxEl.style.width = `${wPct}%`;
@@ -1095,6 +1790,674 @@ function renderVisionTargetOverlay(state) {
     const tag = source === 'tracking_hold' ? ' [trk]' : '';
     visionTargetLabelEl.textContent = `${cls} ${conf}${tag}`;
   }
+}
+
+function clampByteSize(v, fallback = 256) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return fallback;
+  return Math.max(160, Math.min(960, Math.round(n)));
+}
+
+function inferClientAiInputSize(modelName, modelDim, fallback = 320) {
+  const dim = Number(modelDim);
+  if (Number.isFinite(dim) && dim >= 160 && dim <= 960) return Math.round(dim);
+  const name = String(modelName || '').toLowerCase();
+  if (name.includes('cv451') || name.includes('yolov8n')) return 320;
+  return clampByteSize(fallback, 320);
+}
+
+function maybeRecoverInputSizeFromOrtError(errLike) {
+  const msg = String(errLike?.message || errLike || '');
+  const matches = [...msg.matchAll(/Expected:\s*(\d+)/g)];
+  if (matches.length === 0) return false;
+  const expected = Number(matches[matches.length - 1][1]);
+  if (!Number.isFinite(expected) || expected < 160 || expected > 960) return false;
+  let changed = false;
+  if (Number(clientAiRuntime.inputSizeBest) !== expected) {
+    clientAiRuntime.inputSizeBest = expected;
+    changed = true;
+  }
+  if (Number(clientAiRuntime.inputSizeYolo) !== expected) {
+    clientAiRuntime.inputSizeYolo = expected;
+    changed = true;
+  }
+  clientAiRuntime.inputSize = expected;
+  if (!changed) return false;
+  return true;
+}
+
+function inferIntervalN() {
+  return Math.max(1, Math.min(24, Number(visionIntervalNEl?.value || clientAiRuntime.inferEveryN || 8)));
+}
+
+function clientAiDetLabel(index, modelName = '', source = '') {
+  const model = String(modelName || '').toLowerCase();
+  const src = String(source || '').toLowerCase();
+  if (model.includes('best_cv451')) {
+    if (Number(index) === 0) return 'MT_ball';
+  }
+  const labels = [
+    'person','bicycle','car','motorcycle','airplane','bus','train','truck','boat','traffic light',
+    'fire hydrant','stop sign','parking meter','bench','bird','cat','dog','horse','sheep','cow',
+    'elephant','bear','zebra','giraffe','backpack','umbrella','handbag','tie','suitcase','frisbee',
+    'skis','snowboard','sports ball','kite','baseball bat','baseball glove','skateboard','surfboard','tennis racket','bottle',
+    'wine glass','cup','fork','knife','spoon','bowl','banana','apple','sandwich','orange',
+    'broccoli','carrot','hot dog','pizza','donut','cake','chair','couch','potted plant','bed',
+    'dining table','toilet','tv','laptop','mouse','remote','keyboard','cell phone','microwave','oven',
+    'toaster','sink','refrigerator','book','clock','vase','scissors','teddy bear','hair drier','toothbrush',
+  ];
+  const raw = labels[index] || `cls_${index}`;
+  if (src === 'yolo' && raw === 'sports ball') return 'Yolo_Sport_Ball';
+  return normalizeClientAiLabel(raw, src);
+}
+
+function isAllowedClientAiLabel(label) {
+  return CLIENTAI_ALLOWED_LABELS.has(normalizeClientAiLabel(label));
+}
+
+function iouBox(a, b) {
+  const x1 = Math.max(a.x1, b.x1);
+  const y1 = Math.max(a.y1, b.y1);
+  const x2 = Math.min(a.x2, b.x2);
+  const y2 = Math.min(a.y2, b.y2);
+  const inter = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+  const areaA = Math.max(0, a.x2 - a.x1) * Math.max(0, a.y2 - a.y1);
+  const areaB = Math.max(0, b.x2 - b.x1) * Math.max(0, b.y2 - b.y1);
+  const union = areaA + areaB - inter;
+  return union <= 0 ? 0 : inter / union;
+}
+
+function nmsBoxes(boxes, thr = 0.45, maxDet = 20) {
+  const sorted = boxes.slice().sort((a, b) => b.conf - a.conf);
+  const out = [];
+  while (sorted.length > 0) {
+    const pick = sorted.shift();
+    out.push(pick);
+    for (let i = sorted.length - 1; i >= 0; i -= 1) {
+      if (sorted[i].label === pick.label && iouBox(sorted[i], pick) > thr) sorted.splice(i, 1);
+    }
+    if (out.length >= Math.max(1, Number(maxDet || 20))) break;
+  }
+  return out;
+}
+
+function decodeYoloOutput(output, inputSize, confThr = 0.30, modelName = '', source = '', opts = {}) {
+  if (!output || !output.data || !Array.isArray(output.dims) || output.dims.length !== 3) return [];
+  const allowedOnly = opts.allowedOnly !== false;
+  const iouNms = Number.isFinite(Number(opts.iouNms)) ? Number(opts.iouNms) : 0.45;
+  const maxDet = Number.isFinite(Number(opts.maxDet)) ? Number(opts.maxDet) : 20;
+  const dims = output.dims;
+  const data = output.data;
+  const d1 = Number(dims[1]);
+  const d2 = Number(dims[2]);
+  if (!Number.isFinite(d1) || !Number.isFinite(d2) || d1 < 5 || d2 < 5) {
+    return [];
+  }
+  const channels = Math.min(d1, d2);
+  const count = Math.max(d1, d2);
+  const chanFirst = d1 === channels;
+  const boxes = [];
+  for (let i = 0; i < count; i += 1) {
+    const base = chanFirst ? i : i * channels;
+    const get = (c) => (chanFirst ? data[(c * count) + i] : data[base + c]);
+    const cx = get(0);
+    const cy = get(1);
+    const w = get(2);
+    const h = get(3);
+    let bestC = -1;
+    let bestV = 0;
+    for (let c = 4; c < channels; c += 1) {
+      const v = get(c);
+      if (v > bestV) {
+        bestV = v;
+        bestC = c - 4;
+      }
+    }
+    if (bestV < confThr) continue;
+    const label = clientAiDetLabel(bestC, modelName, source);
+    if (allowedOnly && !isAllowedClientAiLabel(label)) continue;
+    const x1 = Math.max(0, Math.min(1, (cx - (w / 2)) / inputSize));
+    const y1 = Math.max(0, Math.min(1, (cy - (h / 2)) / inputSize));
+    const x2 = Math.max(0, Math.min(1, (cx + (w / 2)) / inputSize));
+    const y2 = Math.max(0, Math.min(1, (cy + (h / 2)) / inputSize));
+    boxes.push({ label, conf: Math.max(0, Math.min(1, bestV)), x1, y1, x2, y2, source });
+  }
+  return nmsBoxes(boxes, iouNms, maxDet);
+}
+
+function selectClientAiTopDetections(boxes, maxCount = CLIENTAI_MAX_RENDER_CLASSES) {
+  if (!Array.isArray(boxes) || boxes.length === 0) return [];
+  const grouped = new Map();
+  boxes.forEach((item) => {
+    const label = normalizeClientAiLabel(item?.label, item?.source);
+    const conf = Number(item?.conf);
+    if (!Number.isFinite(conf)) return;
+    const x1 = clamp01(item?.x1);
+    const y1 = clamp01(item?.y1);
+    const x2 = clamp01(item?.x2);
+    const y2 = clamp01(item?.y2);
+    const area = Math.max(0, x2 - x1) * Math.max(0, y2 - y1);
+    if (label === 'MT_ball' && area < CLIENTAI_MT_BALL_MIN_AREA) return;
+    const key = label;
+    const prev = grouped.get(key);
+    const next = {
+      ...item,
+      label,
+      conf: Math.max(0, Math.min(1, conf)),
+      x1,
+      y1,
+      x2,
+      y2,
+      area,
+    };
+    if (!prev || next.conf > Number(prev.conf || 0)) {
+      grouped.set(key, next);
+    }
+  });
+  return [...grouped.values()]
+    .sort((a, b) => {
+      const pa = clientAiClassPriority(a.label);
+      const pb = clientAiClassPriority(b.label);
+      if (pa !== pb) return pa - pb;
+      return Number(b.conf || 0) - Number(a.conf || 0);
+    })
+    .slice(0, Math.max(1, Number(maxCount || 1)));
+}
+
+function applyClientAiClassSwitchDebounce(detections = []) {
+  const state = clientAiRuntime.classSwitchState || {};
+  const nowMs = Date.now();
+  if (!Array.isArray(detections) || detections.length === 0) {
+    state.pendingLabel = '';
+    state.pendingCount = 0;
+    clientAiRuntime.classSwitchState = state;
+    return [];
+  }
+
+  const top = detections[0];
+  const topLabel = normalizeClientAiLabel(top?.label, top?.source);
+  const previousDominant = normalizeClientAiLabel(state.dominantLabel || '');
+
+  if (topLabel === 'MT_ball') {
+    state.dominantLabel = 'MT_ball';
+    state.pendingLabel = '';
+    state.pendingCount = 0;
+    state.holdMtBall = {
+      ...top,
+      label: 'MT_ball',
+      ts_client_ms: nowMs,
+    };
+    clientAiRuntime.classSwitchState = state;
+    return detections;
+  }
+
+  if (previousDominant === 'MT_ball') {
+    if (state.pendingLabel === topLabel) {
+      state.pendingCount = Number(state.pendingCount || 0) + 1;
+    } else {
+      state.pendingLabel = topLabel;
+      state.pendingCount = 1;
+    }
+    const hold = state.holdMtBall;
+    const holdAgeMs = hold ? (nowMs - Number(hold.ts_client_ms || 0)) : Number.POSITIVE_INFINITY;
+    if (Number(state.pendingCount || 0) < CLIENTAI_CLASS_SWITCH_CONFIRM_FRAMES && hold && holdAgeMs <= CLIENTAI_CLASS_SWITCH_HOLD_MS) {
+      const retained = {
+        ...hold,
+        label: 'MT_ball',
+        conf: Math.max(Number(top.conf || 0), Number(hold.conf || 0)),
+      };
+      clientAiRuntime.classSwitchState = state;
+      return [retained, ...detections.slice(0, CLIENTAI_MAX_RENDER_CLASSES - 1)];
+    }
+  }
+
+  state.dominantLabel = topLabel;
+  state.pendingLabel = '';
+  state.pendingCount = 0;
+  clientAiRuntime.classSwitchState = state;
+  return detections;
+}
+
+function applyClientAiBallHeuristics(detections = []) {
+  const dbg = clientAiRuntime.debug;
+  if (!dbg.enabled || !dbg.heuristicsEnabled) return detections;
+  const ballLabels = new Set(['MT_ball', 'Yolo_Sport_Ball']);
+  let cands = (Array.isArray(detections) ? detections : [])
+    .filter((d) => ballLabels.has(normalizeClientAiLabel(d?.label, d?.source)))
+    .map((d) => ({ ...d }));
+  if (dbg.roiGateEnabled) {
+    cands = cands.filter((d) => {
+      const cy = (Number(d.y1 || 0) + Number(d.y2 || 0)) / 2;
+      return cy > Number(dbg.roiGateY || 0.45);
+    });
+  }
+  if (dbg.sizeGateEnabled) {
+    cands = cands.filter((d) => {
+      const area = Math.max(0, (Number(d.x2 || 0) - Number(d.x1 || 0)) * (Number(d.y2 || 0) - Number(d.y1 || 0)));
+      return area >= Number(dbg.minArea || 0.0) && area <= Number(dbg.maxArea || 1.0);
+    });
+  }
+  if (cands.length === 0) return [];
+  cands.sort((a, b) => Number(b.conf || 0) - Number(a.conf || 0));
+  return [cands[0]];
+}
+
+function computeFrameLumaStats(videoEl) {
+  if (!clientAiLumaCtx || !videoEl || videoEl.videoWidth < 8 || videoEl.videoHeight < 8) {
+    return { mean: null, p95: null };
+  }
+  const w = 96;
+  const h = 54;
+  clientAiLumaCanvas.width = w;
+  clientAiLumaCanvas.height = h;
+  clientAiLumaCtx.drawImage(videoEl, 0, 0, w, h);
+  const data = clientAiLumaCtx.getImageData(0, 0, w, h).data;
+  const hist = new Uint32Array(256);
+  let sum = 0;
+  const px = w * h;
+  for (let i = 0; i < px; i += 1) {
+    const o = i * 4;
+    const y = Math.max(0, Math.min(255, Math.round((0.2126 * data[o]) + (0.7152 * data[o + 1]) + (0.0722 * data[o + 2]))));
+    hist[y] += 1;
+    sum += y;
+  }
+  const mean = sum / Math.max(1, px);
+  let cdf = 0;
+  let p95 = 255;
+  const target = px * 0.95;
+  for (let i = 0; i < hist.length; i += 1) {
+    cdf += hist[i];
+    if (cdf >= target) {
+      p95 = i;
+      break;
+    }
+  }
+  return { mean: Number(mean.toFixed(2)), p95: Number(p95.toFixed(2)) };
+}
+
+function logClientAiDebugFrame(rawDetections = [], inputSize = 0) {
+  const dbg = clientAiRuntime.debug;
+  if (!dbg.enabled) return;
+  const liveVideoEl = document.getElementById('liveVideo');
+  const luma = computeFrameLumaStats(liveVideoEl);
+  const detTop = (Array.isArray(rawDetections) ? rawDetections : [])
+    .slice()
+    .sort((a, b) => Number(b.conf || 0) - Number(a.conf || 0))
+    .slice(0, CLIENTAI_DEBUG_LOG_TOPK)
+    .map((d) => {
+      const x1 = clamp01(d.x1);
+      const y1 = clamp01(d.y1);
+      const x2 = clamp01(d.x2);
+      const y2 = clamp01(d.y2);
+      const area = Math.max(0, (x2 - x1) * (y2 - y1));
+      const cx = (x1 + x2) / 2;
+      const cy = (y1 + y2) / 2;
+      return {
+        class: normalizeClientAiLabel(d.label, d.source),
+        conf: Number(Number(d.conf || 0).toFixed(4)),
+        x1: Number(x1.toFixed(4)),
+        y1: Number(y1.toFixed(4)),
+        x2: Number(x2.toFixed(4)),
+        y2: Number(y2.toFixed(4)),
+        area: Number(area.toFixed(4)),
+        cx: Number(cx.toFixed(4)),
+        cy: Number(cy.toFixed(4)),
+      };
+    });
+  const payload = {
+    ts: new Date().toISOString(),
+    conf_thres: Number(dbg.rawConfThres),
+    iou_nms: Number(dbg.iouNms),
+    imgsz: Number(inputSize || 0),
+    max_det: Number(dbg.maxDet),
+    num_det: Array.isArray(rawDetections) ? rawDetections.length : 0,
+    dets_top10: detTop,
+    frame_mean_luma: luma.mean,
+    frame_p95_luma: luma.p95,
+  };
+  if (dbg.logConsole) {
+    try {
+      console.log('[ClientAI Debug]', JSON.stringify(payload));
+    } catch (_) {}
+  }
+  if (dbg.logPanel && debugDetectLogEl) {
+    debugDetectLogEl.textContent = JSON.stringify(payload, null, 2);
+  }
+}
+
+function applyClientAiConfidenceStability(detections = []) {
+  if (!Array.isArray(detections) || detections.length === 0) return [];
+  const nowMs = Date.now();
+  const out = detections.map((d) => ({ ...d }));
+  out.forEach((det) => {
+    const label = normalizeClientAiLabel(det?.label, det?.source);
+    const conf = Number(det?.conf);
+    if (label !== CLIENTAI_STABLE_CONF_LABEL || !Number.isFinite(conf)) return;
+    const prev = clientAiRuntime.stableByLabel[label];
+    if (prev && (nowMs - Number(prev.ts_client_ms || 0)) <= CLIENTAI_STABLE_MAX_AGE_MS) {
+      const prevConf = Number(prev.conf || 0);
+      if (Number.isFinite(prevConf) && prevConf >= CLIENTAI_STABLE_LOCK_CONF) {
+        const overlap = iouBox(prev, det);
+        const floor = Math.max(0, prevConf - CLIENTAI_STABLE_MAX_DROP);
+        if (overlap >= CLIENTAI_STABLE_MIN_IOU && conf < floor) {
+          det.conf = Math.max(0, Math.min(1, Number(floor.toFixed(4))));
+        }
+      }
+    }
+    clientAiRuntime.stableByLabel[label] = {
+      x1: Number(det.x1 || 0),
+      y1: Number(det.y1 || 0),
+      x2: Number(det.x2 || 0),
+      y2: Number(det.y2 || 0),
+      conf: Number(det.conf || 0),
+      ts_client_ms: nowMs,
+    };
+  });
+  return out;
+}
+
+async function ensureOrtLoaded() {
+  if (window.ort?.InferenceSession) return;
+  const sources = [CLIENTAI_ORT_CDN, CLIENTAI_ORT_FALLBACK];
+  for (const src of sources) {
+    await new Promise((resolve, reject) => {
+      const existing = document.querySelector(`script[data-clientai-ort-src="${src}"]`);
+      if (window.ort?.InferenceSession) {
+        resolve();
+        return;
+      }
+      if (existing && existing.dataset.state === 'loaded') {
+        resolve();
+        return;
+      }
+      if (existing && existing.dataset.state === 'error') {
+        existing.remove();
+      }
+      const script = existing || document.createElement('script');
+      script.src = src;
+      script.async = true;
+      script.dataset.clientaiOrt = '1';
+      script.dataset.clientaiOrtSrc = src;
+      script.dataset.state = 'loading';
+      const onLoad = () => {
+        script.dataset.state = 'loaded';
+        clientAiRuntime.ortScriptSrc = src;
+        resolve();
+      };
+      const onError = () => {
+        script.dataset.state = 'error';
+        reject(new Error(`ort_load_failed:${src}`));
+      };
+      script.addEventListener('load', onLoad, { once: true });
+      script.addEventListener('error', onError, { once: true });
+      if (!existing) document.head.appendChild(script);
+      setTimeout(() => {
+        if (!window.ort?.InferenceSession) onError();
+      }, 9000);
+    }).catch(() => {});
+    if (window.ort?.InferenceSession) return;
+  }
+  throw new Error('ort_unavailable');
+}
+
+async function postClientAiTarget(payload) {
+  const res = await fetch(`${clientAiApiBase()}/api/vision/client-target`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok || !data?.ok) {
+    return false;
+  }
+  return true;
+}
+
+async function ensureClientAiModelReady() {
+  await ensureOrtLoaded();
+  if (window.ort?.env?.wasm) {
+    const base = clientAiRuntime.ortScriptSrc
+      ? clientAiRuntime.ortScriptSrc.replace(/ort\.min\.js.*$/i, '')
+      : 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
+    window.ort.env.wasm.wasmPaths = base;
+    window.ort.env.wasm.numThreads = 1;
+    window.ort.env.wasm.proxy = false;
+  }
+  if (!clientAiRuntime.manifest) {
+    const manifestRes = await fetch(`${clientAiApiBase()}/api/clientai/model-manifest`, { cache: 'no-store' });
+    if (!manifestRes.ok) throw new Error(`manifest_http_${manifestRes.status}`);
+    clientAiRuntime.manifest = await manifestRes.json();
+  }
+  const manifest = clientAiRuntime.manifest || {};
+  const models = Array.isArray(manifest.models) ? manifest.models : [];
+  if (models.length === 0) throw new Error('model_manifest_empty');
+  const bestModel = models.find((m) => String(m?.name || '').includes('best_cv451'))
+    || models.find((m) => String(m?.name || '').includes('best'))
+    || models.find((m) => m.name === CLIENTAI_PREFERRED_MODEL)
+    || models[0];
+  const yoloModel = models.find((m) => String(m?.name || '').includes('yolov8n'))
+    || models.find((m) => String(m?.name || '').includes('yolo11n'))
+    || models.find((m) => m.name === CLIENTAI_YOLO_MODEL_FALLBACK)
+    || models[0];
+  if (!bestModel?.url || !yoloModel?.url) throw new Error('model_manifest_invalid');
+  const capability = detectClientAiCapability();
+  const providers = capability.provider === 'webgpu' ? ['webgpu', 'wasm'] : ['wasm'];
+  clientAiRuntime.provider = providers[0];
+  const choice = resolveClientAiModelChoice(clientAiRuntime.modelChoice);
+  if (!clientAiRuntime.inferSessionBest) {
+    clientAiRuntime.inferSessionBest = await window.ort.InferenceSession.create(`${clientAiApiBase()}${bestModel.url}`, {
+      executionProviders: providers,
+      graphOptimizationLevel: 'all',
+    });
+    clientAiRuntime.modelNameBest = String(bestModel.name || CLIENTAI_PREFERRED_MODEL);
+    const firstInputBest = clientAiRuntime.inferSessionBest.inputNames[0];
+    const inMetaBest = clientAiRuntime.inferSessionBest.inputMetadata?.[firstInputBest];
+    const dimsBest = Array.isArray(inMetaBest?.dimensions) ? inMetaBest.dimensions : [];
+    clientAiRuntime.inputSizeBest = inferClientAiInputSize(clientAiRuntime.modelNameBest, Number(dimsBest[2]), 320);
+  }
+  if ((choice === CLIENTAI_MODEL_CHOICE_YOLO || choice === CLIENTAI_MODEL_CHOICE_MIX) && !clientAiRuntime.inferSessionYolo) {
+    clientAiRuntime.inferSessionYolo = await window.ort.InferenceSession.create(`${clientAiApiBase()}${yoloModel.url}`, {
+      executionProviders: providers,
+      graphOptimizationLevel: 'all',
+    });
+    clientAiRuntime.modelNameYolo = String(yoloModel.name || CLIENTAI_YOLO_MODEL_FALLBACK);
+    const firstInputYolo = clientAiRuntime.inferSessionYolo.inputNames[0];
+    const inMetaYolo = clientAiRuntime.inferSessionYolo.inputMetadata?.[firstInputYolo];
+    const dimsYolo = Array.isArray(inMetaYolo?.dimensions) ? inMetaYolo.dimensions : [];
+    clientAiRuntime.inputSizeYolo = inferClientAiInputSize(clientAiRuntime.modelNameYolo, Number(dimsYolo[2]), 320);
+  }
+  if (choice === CLIENTAI_MODEL_CHOICE_YOLO) {
+    clientAiRuntime.inferSession = clientAiRuntime.inferSessionYolo || clientAiRuntime.inferSessionBest;
+    clientAiRuntime.modelName = String(clientAiRuntime.modelNameYolo || clientAiRuntime.modelNameBest || CLIENTAI_YOLO_MODEL_FALLBACK);
+    clientAiRuntime.inputSize = Number(clientAiRuntime.inputSizeYolo || clientAiRuntime.inputSizeBest || 320);
+  } else {
+    clientAiRuntime.inferSession = clientAiRuntime.inferSessionBest;
+    clientAiRuntime.modelName = String(clientAiRuntime.modelNameBest || CLIENTAI_PREFERRED_MODEL);
+    clientAiRuntime.inputSize = Number(clientAiRuntime.inputSizeBest || 320);
+  }
+  clientAiRuntime.provider = providers[0];
+  clientAiRuntime.modelReady = true;
+  await postClientAiState({ provider: clientAiRuntime.provider, model_id: getClientAiStateModelId() });
+}
+
+async function inferAndPublishClientAiFrame() {
+  if (!clientAiRuntime.modelReady) return;
+  const liveVideoEl = document.getElementById('liveVideo');
+  if (!liveVideoEl || liveVideoEl.videoWidth < 16 || liveVideoEl.videoHeight < 16) return;
+  const choice = resolveClientAiModelChoice(clientAiRuntime.modelChoice);
+  const runs = [];
+  if (choice === CLIENTAI_MODEL_CHOICE_MIX) {
+    if (clientAiRuntime.inferSessionBest) {
+      runs.push({
+        session: clientAiRuntime.inferSessionBest,
+        inputSize: clampByteSize(clientAiRuntime.inputSizeBest, 320),
+        modelName: String(clientAiRuntime.modelNameBest || CLIENTAI_PREFERRED_MODEL),
+        source: 'mt',
+      });
+    }
+    if (clientAiRuntime.inferSessionYolo) {
+      runs.push({
+        session: clientAiRuntime.inferSessionYolo,
+        inputSize: clampByteSize(clientAiRuntime.inputSizeYolo, 320),
+        modelName: String(clientAiRuntime.modelNameYolo || CLIENTAI_YOLO_MODEL_FALLBACK),
+        source: 'yolo',
+      });
+    }
+  } else {
+    const useYolo = choice === CLIENTAI_MODEL_CHOICE_YOLO;
+    const singleSession = useYolo ? (clientAiRuntime.inferSessionYolo || clientAiRuntime.inferSession) : (clientAiRuntime.inferSessionBest || clientAiRuntime.inferSession);
+    if (singleSession) {
+      runs.push({
+        session: singleSession,
+        inputSize: clampByteSize(useYolo ? clientAiRuntime.inputSizeYolo : clientAiRuntime.inputSizeBest, 320),
+        modelName: useYolo ? String(clientAiRuntime.modelNameYolo || CLIENTAI_YOLO_MODEL_FALLBACK) : String(clientAiRuntime.modelNameBest || CLIENTAI_PREFERRED_MODEL),
+        source: useYolo ? 'yolo' : 'mt',
+      });
+    }
+  }
+  if (runs.length === 0) return;
+  syncClientAiDebugConfigFromUi();
+  const dbg = clientAiRuntime.debug;
+  const tensorCache = new Map();
+  const getTensorForSize = (inputSize) => {
+    const size = clampByteSize(inputSize, 320);
+    if (tensorCache.has(size)) return tensorCache.get(size);
+    clientAiSampleCanvas.width = size;
+    clientAiSampleCanvas.height = size;
+    clientAiSampleCtx.drawImage(liveVideoEl, 0, 0, size, size);
+    const src = clientAiSampleCtx.getImageData(0, 0, size, size).data;
+    const hw = size * size;
+    const chw = new Float32Array(3 * hw);
+    for (let i = 0; i < hw; i += 1) {
+      const o = i * 4;
+      chw[i] = src[o] / 255.0;
+      chw[hw + i] = src[o + 1] / 255.0;
+      chw[(2 * hw) + i] = src[o + 2] / 255.0;
+    }
+    const tensor = new window.ort.Tensor('float32', chw, [1, 3, size, size]);
+    tensorCache.set(size, tensor);
+    return tensor;
+  };
+
+  const t0 = performance.now();
+  let allBoxes = [];
+  let allRawBoxes = [];
+  for (const run of runs) {
+    const feeds = {};
+    const firstInput = run.session.inputNames[0];
+    feeds[firstInput] = getTensorForSize(run.inputSize);
+    const outMap = await run.session.run(feeds);
+    const outName = run.session.outputNames[0];
+    const output = outMap[outName];
+    if (dbg.enabled) {
+      const rawBoxes = decodeYoloOutput(
+        output,
+        run.inputSize,
+        Number(dbg.rawConfThres),
+        run.modelName,
+        run.source,
+        { allowedOnly: false, iouNms: Number(dbg.iouNms), maxDet: Number(dbg.maxDet) },
+      );
+      allRawBoxes = allRawBoxes.concat(rawBoxes);
+    }
+    const boxes = decodeYoloOutput(
+      output,
+      run.inputSize,
+      0.30,
+      run.modelName,
+      run.source,
+      { allowedOnly: true, iouNms: 0.45, maxDet: 20 },
+    );
+    allBoxes = allBoxes.concat(boxes);
+  }
+  const inferMs = performance.now() - t0;
+  clientAiRuntime.inferSuccess += 1;
+  clientAiRuntime.lastInferMs = inferMs;
+  clientAiRuntime.inferMsAvg = clientAiRuntime.inferMsAvg == null ? inferMs : ((clientAiRuntime.inferMsAvg * 0.85) + (inferMs * 0.15));
+  if (clientAiRuntime.inferMsAvg > 450 && clientAiRuntime.inferEveryN < 20) clientAiRuntime.inferEveryN += 1;
+  if (clientAiRuntime.inferMsAvg < 220 && clientAiRuntime.inferEveryN > 4) clientAiRuntime.inferEveryN -= 1;
+  if (dbg.enabled) {
+    renderDebugRawDetections(allRawBoxes);
+    logClientAiDebugFrame(allRawBoxes, Number(runs[0]?.inputSize || clientAiRuntime.inputSize || 0));
+  } else {
+    hideDebugRawOverlay();
+  }
+
+  const topDetections = applyClientAiBallHeuristics(applyClientAiClassSwitchDebounce(
+    applyClientAiConfidenceStability(
+      selectClientAiTopDetections(allBoxes, CLIENTAI_MAX_RENDER_CLASSES),
+    ),
+  ));
+  latestClientAiLocalDetections = topDetections.map((det) => ({ ...det, ts_client_ms: Date.now() }));
+  if (clientAiInferMsEl) clientAiInferMsEl.value = inferMs.toFixed(1);
+  if (vmClientAiInferMsEl) vmClientAiInferMsEl.textContent = inferMs.toFixed(1);
+  if (vmClientAiModelEl) vmClientAiModelEl.textContent = getClientAiDisplayModelLabel();
+  renderVisionTargetOverlay(latestVisionState);
+  if (topDetections.length === 0) {
+    return;
+  }
+  if (!clientAiRuntime.sessionArmed) {
+    clientAiRuntime.postSkipUnarmed += 1;
+    return;
+  }
+  const posted = await postClientAiTarget({
+    ts_client_ms: Date.now(),
+    frame_id: clientAiRuntime.frameId,
+    model_id: getClientAiStateModelId(),
+    provider: clientAiRuntime.provider || detectClientAiCapability().provider,
+    infer_ms: inferMs,
+    image_w: Number(liveVideoEl.videoWidth || 0),
+    image_h: Number(liveVideoEl.videoHeight || 0),
+    detections: topDetections,
+  });
+  if (posted) {
+    clientAiRuntime.postOk += 1;
+  } else {
+    clientAiRuntime.postFail += 1;
+  }
+}
+
+async function runClientAiRuntimeTick() {
+  if (clientAiRuntime.tickBusy) return;
+  clientAiRuntime.tickBusy = true;
+  try {
+    const activeMode = String(clientAiStatus?.active_mode || '').toLowerCase();
+    if (activeMode !== 'client-ai') {
+      latestClientAiLocalDetections = [];
+      hideDebugRawOverlay();
+      return;
+    }
+    await ensureClientAiModelReady();
+    clientAiRuntime.frameId += 1;
+    clientAiRuntime.inferEveryN = inferIntervalN();
+    if ((clientAiRuntime.frameId % clientAiRuntime.inferEveryN) !== 0) return;
+    clientAiRuntime.inferAttempts += 1;
+    await inferAndPublishClientAiFrame();
+    clientAiRuntime.lastError = '';
+  } catch (e) {
+    if (maybeRecoverInputSizeFromOrtError(e)) {
+      clientAiRuntime.lastError = '';
+      return;
+    }
+    clientAiRuntime.lastError = String(e?.message || e || 'infer_unavailable');
+    setClientAiStatus(`ClientAI infer unavailable: ${clientAiRuntime.lastError}`, true);
+    latestClientAiLocalDetections = [];
+  } finally {
+    clientAiRuntime.tickBusy = false;
+  }
+}
+
+function clientAiRuntimeLoop() {
+  if (!clientAiRuntime.running) return;
+  runClientAiRuntimeTick().finally(() => {
+    requestAnimationFrame(clientAiRuntimeLoop);
+  });
+}
+
+function startClientAiRuntimeLoop() {
+  if (clientAiRuntime.running) return;
+  clientAiRuntime.running = true;
+  requestAnimationFrame(clientAiRuntimeLoop);
 }
 
 function updateStreamAlertUi() {
@@ -1411,10 +2774,20 @@ pollVersion();
 pollTelemetry();
 renderTopTelemetryLine();
 bindVisionConfigControls();
+bindClientAiControls();
+bindClientAiDebugControls();
+syncClientAiCapabilityAuto();
 fetchVisionConfig();
 fetchVideoConfig();
-setTimeout(fetchVideoConfig, 1200);
-setTimeout(fetchVideoConfig, 4000);
+pollClientAiStatus();
+pollClientSessionStatus();
+pollClientTargetLatest();
+startClientAiRuntimeLoop();
+setInterval(pollClientAiStatus, 2000);
+setInterval(pollClientSessionStatus, 2000);
+setInterval(pollClientTargetLatest, 1000);
+setInterval(syncClientAiCapabilityAuto, 15000);
+scheduleVideoProfileResync();
 bindVisionModeButtons();
 pollVisionState();
 setInterval(postVisionMetricsHeartbeat, 2000);
@@ -1428,6 +2801,14 @@ setInterval(() => syncStreamStatusLine(false), 1000);
 pollVisionMetrics();
 pollViewerSummary();
 pollPowerHistory();
+window.addEventListener('focus', () => {
+  fetchVideoConfig();
+});
+document.addEventListener('visibilitychange', () => {
+  if (!document.hidden) {
+    fetchVideoConfig();
+  }
+});
 window.addEventListener('live-video-fps', (ev) => {
   latestFps = Number(ev?.detail?.fps || 0);
   latestVideoEventMs = Date.now();

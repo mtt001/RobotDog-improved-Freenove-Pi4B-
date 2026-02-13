@@ -3,7 +3,7 @@
 > **Server-only README** — this file documents the Raspberry Pi Server code and **syncs with the Pi Server side**.
 
 ## Version
-v1.16.25 (2026-02-12 18:33 local time)
+v1.16.62 (2026-02-13 21:53 local time)
 
 ## Quick Start
 1. Start core server (headless fallback):
@@ -19,13 +19,31 @@ ss -lntp | egrep ':5001|:8001'
 ```bash
 systemctl is-active smartdog.service robot-sfu.service robot-viewer.service robot-color-viewer.service robot-publisher.service robot-telemetry.service
 ```
-- Open in Safari (iPhone/iPad/macOS): [http://192.168.0.32:8081/color](http://192.168.0.32:8081/color)
-- Legacy/basic viewer page remains available at: [http://192.168.0.32:8080/webrtc_view.html](http://192.168.0.32:8080/webrtc_view.html)
+- Primary operator page (current production workflow): [http://192.168.0.32:8081/color](http://192.168.0.32:8081/color)
+- ClientAI new integration page (active ClientAI implementation lane): [http://192.168.0.32:8080/webrtc_view.html](http://192.168.0.32:8080/webrtc_view.html)
+- Legacy/basic helper page (non-primary monitor): [http://192.168.0.32:8080/index.html](http://192.168.0.32:8080/index.html)
 - Wait for WebRTC video to show `Peer connected`.
 - Press `ARM` before movement commands.
 - Use hold-to-move controls (release to stop).
 - Use `STOP` any time for immediate safety stop.
 - Important: do not open [http://192.168.0.32:8889/robotdog/whep](http://192.168.0.32:8889/robotdog/whep) directly; it is signaling API, not player page.
+
+## Viewer Link Roles (Primary vs New vs Legacy)
+- Primary production operator UI:
+  - `http://192.168.0.32:8081/color`
+  - Purpose: normal robot operations, production control workflow, Pi color-viewer runtime controls, and ClientAI mode/status controls in the tuned layout.
+- New ClientAI integration UI:
+  - `http://192.168.0.32:8080/webrtc_view.html`
+  - Purpose: secondary ClientAI integration lane (legacy/minimal viewer layout) for isolated diagnostics.
+- Legacy helper page:
+  - `http://192.168.0.32:8080/index.html`
+  - Purpose: simple monitor/helper page; not a primary control surface.
+- ClientAI smoke-check script (for initial implementation verification):
+  - `bash Server/ClientAI/clientai_smoke_check.sh 192.168.0.32`
+  - Purpose: quick API/UI sanity gate to catch obvious issues before deeper device/performance testing.
+- ClientAI simulated lab script (rapid check/fix without live camera):
+  - `bash Server/ClientAI/clientai_sim_lab.sh 192.168.0.32 20 0.90 300`
+  - Purpose: generate static red-ball input and validate ClientAI pipeline/confidence thresholds quickly in controlled conditions.
 
 ## Operational Overview (WebRTC/SFU + YOLO on Pi)
 This deployment is now Pi-first and can run standalone for control + streaming + browser ops.
@@ -53,19 +71,26 @@ This deployment is now Pi-first and can run standalone for control + streaming +
   - `/api/session` (arm/disarm + control-lock status)
   - `/api/command` (session-gated command path)
   - `/api/diagnostics` (service + port + session diagnostics)
+  - `/diag/system-health.json` (watchdog snapshot: deterministic PASS/WARN/FAIL classification, score, and per-check details)
+  - `/diag/clientai.json` (compact automation snapshot: mode/model/infer/detect/session/watchdog summary with deterministic PASS/WARN/FAIL status)
   - `/api/clientai` (ClientAI mode/state policy contract)
   - `/api/clientai/model-manifest` and `/api/clientai/model/<name>` (browser model bootstrap stream)
   - `/api/vision/client-target` (advisory browser-target validation ingress)
+  - `/api/vision/client-target/latest` (validated-target consumer snapshot with `tracking_consumer` eligibility/reason for safe downstream tracking-assist gating)
+  - client-target label validation now accepts browser aliases (`MT_ball`, `Yolo_Sport_Ball`) via normalized mapping (`mt ball`, `yolo sport ball`) in addition to canonical labels (`sports ball`, `dog`, `person`, `cat`)
+  - mode policy default is now browser-first (`client-ai`), with deterministic `edge-ai` fallback when client capability probe fails
+  - `GET /api/clientai` now includes `last_target.top_conf/top_label` for confidence-threshold test automation
 
 5. YOLO/Tracking runtime (Pi color-viewer lane):
 - `robot-color-viewer.service` runs `color_viewer_server.py` (Pi deployment source tracked from `Client/tools/imu_viewer/color_viewer_server.py`).
 - Runtime endpoints on `:8081` include `/vision/state`, `/vision/config`, `/vision/metrics`.
 - Runtime video profile endpoint `/video/config` now persists profile and publisher override for WebRTC resolution continuity:
   - profile store: `/home/pi/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Server/color_viewer/video_runtime_config.json`
+  - default persisted profile target: `960x540` (`Default (960)` in `/color` UI selector)
   - publisher env override: `/home/pi/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Server/color_viewer/video_publisher_profile.env`
   - apply path: attempts `robot-publisher.service` restart; if restart is unavailable, saved profile still applies on next publisher restart/power cycle.
   - `/color` frontend now emits profile-apply event and triggers immediate WebRTC renegotiation, reducing/noing manual Safari refresh requirement after resolution change.
-  - Color-viewer HTTP responses now include no-store cache headers, and frontend performs delayed profile re-sync calls after load to avoid stale Safari default-profile display.
+  - Color-viewer HTTP responses include no-store cache headers; frontend now performs multi-pass profile re-sync (startup/post-apply/focus/visibility-return) to prevent stale dial state.
 - Detector pipeline reads stream from `8001` first, then falls back to `rtsp://<pi>:8554/robotdog`.
 - Current deployed backend path supports `tflite-multi` with `best`-first then `yolov8n` fallback scheduling; KPI blocker is CPU saturation under dual-model load.
 
@@ -159,7 +184,9 @@ systemctl is-active robot-telemetry.service
 2. Open in browser:
 - macOS Safari/Chrome (primary control+video): `http://192.168.0.32:8081/color`
 - iOS/iPadOS Safari (primary control+video): `http://192.168.0.32:8081/color`
-- Optional legacy/basic viewer: `http://192.168.0.32:8080/webrtc_view.html`
+- ClientAI control/status is now available directly in `/color` action panel (`ClientAI (Browser Inference Policy)` box).
+- Secondary ClientAI integration viewer: `http://192.168.0.32:8080/webrtc_view.html`
+- Legacy helper page: `http://192.168.0.32:8080/index.html`
 
 Important:
 - `http://192.168.0.32:8889/robotdog/whep` is signaling API endpoint only (not a direct webpage).
@@ -182,6 +209,50 @@ Important:
   - structured JSON session/command logs from telemetry API service
   - viewer cache policy (development-safe): HTML no-store, JS/CSS short cache
 - Viewer header includes visible build badge (`Build: vX | YYYY-MM-DD HH:MM`) for runtime version confirmation.
+- `/color` metrics ownership is split explicitly:
+  - `Infer (ms) ... [Pi]` remains Pi runtime detector latency from `/vision/state`.
+  - `ClientAI Infer (ms)` is browser-published infer latency from `/api/clientai` (`last_target.infer_ms`).
+  - `Publish Counters` now uses `accepted/rejected/local_skip` so unarmed local skips are not confused with server-side rejects.
+- `/color` ClientAI runtime now applies MT-ball confidence stability guard (short-window, IoU-gated drop limiting) before advisory publish to reduce one-frame lighting dip churn during hard-scene probes.
+- `/color` ClientAI runtime now also enforces guardrails for class stability:
+  - minimum `MT_ball` bbox area gate,
+  - 2-frame confirmation before switching dominant lock from `MT_ball` to non-ball class.
+- Guardrail threshold tuning (current):
+  - `MT_ball` minimum bbox area gate rebalanced to `0.008` (from `0.015`) to recover hard-scene detect duty-cycle while keeping class-switch debounce enabled.
+- `/color` now includes `Debug Detection (ClientAI)` mode (default `off`) for bright-vs-dark diagnosis:
+  - raw detection overlay (`conf>=0.10` configurable) draws all YOLO boxes with `class/conf/area/center`.
+  - per-frame JSON logging (console + optional on-screen panel) emits:
+    - `ts`, `conf_thres`, `iou_nms`, `imgsz`, `max_det`, `num_det`,
+    - `dets_top10[{class,conf,x1,y1,x2,y2,area,cx,cy}]`,
+    - `frame_mean_luma`, `frame_p95_luma`.
+  - optional `Ball Heuristics` gates:
+    - ROI gate (`cy > roi_gate_y`, default `0.45`),
+    - size gate (`area in [min_area,max_area]`, editable),
+    - final pick = highest-confidence remaining candidate.
+- `/color` now auto-posts ClientAI capability heartbeat (`/api/clientai`) on startup/interval so browser-first default can activate `client-ai` without manual Apply after service restarts.
+
+## Bright vs Dark Debug Workflow
+1. Open `/color`, switch `Debug Mode = on`, keep `Console Log = on`, and optionally enable `On-screen Log`.
+2. Capture bright-scene and dark-scene runs with identical camera angle/ball position.
+3. Compare these metrics first:
+- Threshold issue signal:
+  - `frame_mean_luma`/`frame_p95_luma` shift strongly, while `conf_p10` falls near conf threshold and `num_det` remains non-zero.
+- NMS/candidate conflict signal:
+  - `num_det` high but `dets_top10` has overlapping boxes and top candidate jumps despite similar luma.
+- Dataset/domain gap signal:
+  - light shift causes sustained low `conf`, wrong classes, or unstable bbox center/area (`cx/cy/area` drift) even after threshold/NMS tuning.
+4. Recommended capture artifact:
+  - save 10-20 seconds of console JSON for bright and dark, plus one screenshot each with raw overlay enabled.
+- Watchdog operations quick drill (`robotdog-agent-watchdog.service`):
+  - restart + verify active:
+    - `sudo systemctl restart robotdog-agent-watchdog.service`
+    - `systemctl is-active robotdog-agent-watchdog.service`
+  - recovery drill (stop/start + verify NDJSON growth):
+    - `sudo systemctl stop robotdog-agent-watchdog.service && sleep 2 && sudo systemctl start robotdog-agent-watchdog.service`
+    - `wc -l /home/pi/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Temp/snapshots/agent_watchdog.ndjson`
+  - latest record check:
+    - `tail -n 1 /home/pi/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Temp/snapshots/agent_watchdog.ndjson`
+  - current validation baseline (2026-02-13 18:01 CST): restart recovery `3s`, stop/start recovery `5s`, NDJSON growth confirmed within 16s (`+4` records).
 - Viewer includes low-priority UI parity scaffold:
   - motion-key arrangement aligned to `W/E/R/S/D/F/C`
   - `Tracking` + `Yolo` are now runtime Pi-state toggles (read-only vision state path)
@@ -449,6 +520,43 @@ curl http://192.168.0.32:8090/api/telemetry
   - tighter telemetry/API access control
 
 ## Revision History
+- 2026-02-13 21:39 v1.16.62  Added `/color` Debug Detection mode documentation (raw-all-detections overlay, per-frame JSON log schema, and optional ROI/size Ball Heuristics), plus bright-vs-dark reproduction workflow and metric interpretation guidance.
+- 2026-02-13 21:39 v1.16.61  Updated `/color` guardrail tuning note: rebalanced MT-ball min-area threshold to `0.008` (from `0.015`) to improve hard-scene detect duty-cycle while preserving 2-frame class-switch debounce.
+- 2026-02-13 21:34 v1.16.60  Added `/color` guardrail #4 behavior note: MT-ball min-area filter + 2-frame class-switch confirmation are active to suppress transient non-ball flips under hard lighting/occlusion conditions.
+- 2026-02-13 19:31 v1.16.59  Added `/color` ClientAI confidence-stability behavior note: MT-ball short-window IoU-gated drop-limiting is now active before advisory publish to improve hard-scene consistency without changing model weights.
+- 2026-02-13 18:01 v1.16.58  Added watchdog operations quick-drill commands/results (`robotdog-agent-watchdog.service`) with measured recovery evidence (restart/stop-start timings and NDJSON growth gate) for 2-minute SLA validation.
+- 2026-02-13 17:57 v1.16.57  Updated telemetry API behavior notes: ClientAI target validation now normalizes browser label aliases (`MT_ball`, `Yolo_Sport_Ball`) to reduce `label_not_allowed` reject noise and keep fresh target updates flowing.
+- 2026-02-13 17:47 v1.16.56  Clarified `/color` ClientAI publish-counter semantics in operator docs: `accepted/rejected/local_skip` distinguishes server acceptance/reject totals from browser-local unarmed skips.
+- 2026-02-13 17:39 v1.16.55  Reorganized README layout by moving the long `Revision History` section to the bottom and keeping chronology in one place.
+- 2026-02-13 16:21 v1.16.54  Added always-on close-loop watchdog deployment profile: systemd unit template (`tools/systemd/robotdog-agent-watchdog.service`), remote installer (`tools/install_agent_watchdog_service.sh`), and Pi runtime wiring for API-only watchdog mode (`--no-dom`) with persistent NDJSON/supervisor logs.
+- 2026-02-13 15:27 v1.16.53  Added `/color` ClientAI model-selection dial (`best_cv451_onnx`, `yolov8n*`, `Mix`) and implemented browser Mix runtime behavior: dual-model inference (`best_cv451` + `yolov8n`), lock priority `MT_ball > Yolo_Sport_Ball > Dog`, and up-to-3 class overlays with distinct per-class colors (MT green retained, YOLO classes non-green).
+- 2026-02-13 15:23 v1.16.52  Added compact automation diagnostics endpoint `GET /diag/clientai.json` (ClientAI mode/model/infer/detect/session summary + deterministic PASS/WARN/FAIL), introduced close-loop watchdog/test tooling (`tools/agent_watchdog.py`, `tools/agent_watchdog_supervisor.sh`, `tests/integration_test_clientai.py`), and validated end-to-end on live host.
+- 2026-02-13 15:08 v1.16.51  Cleaned `/color` operator UI for ClientAI-first usage: moved placeholder footer/actions and Pi tuning controls to hidden virtual space, removed disabled trial keys from visible control grid, and kept only active operational controls visible.
+- 2026-02-13 15:03 v1.16.50  Polished `/color` metrics UI for ClientAI-first operation: removed visible Pi-edge wording (`Pi Runtime` / `Pi Edge-AI`), kept visible infer/model rows ClientAI-focused, and moved Pi-edge/runtime tuning rows into hidden virtual debug space.
+- 2026-02-13 13:36 v1.16.49  Finalized telemetry watchdog diagnostics surface by wiring live `GET /diag/system-health.json` endpoint to runtime health snapshots (PASS/WARN/FAIL score + checks) and enabling structured NDJSON watchdog record emission path.
+- 2026-02-13 11:46 v1.16.48  Cleaned `/color` `Vision/Stream Metrics` panel to remove Pi-edge wording from infer rows; panel now presents a single generic infer/model pair and maps it to ClientAI infer/model when `active_mode=client-ai`.
+- 2026-02-13 10:54 v1.16.47  Fixed `/color` ClientAI trained-model decode path for single-class exports: browser now supports 5-channel YOLO output, maps `best_cv451` class index `0` to `MT_ball`, and displays explicit live `DETECTED` overlay banner when target is found.
+- 2026-02-13 10:39 v1.16.46  Updated ClientAI model-default policy to prioritize trained `best_cv451.onnx` for browser startup/auto-sync, replacing generic `yolov8n` as first-choice model in current ClientAI stage.
+- 2026-02-13 10:25 v1.16.45  Simplified `/color` runtime display/behavior for ClientAI stage: when `active_mode=client-ai`, viewer auto-turns Pi YOLO Edge-AI OFF, locks edge toggle off, and hides Pi infer rows to keep a single truth source for operators.
+- 2026-02-13 10:18 v1.16.44  Updated `/color` ClientAI advisory publish behavior to skip empty-detection frames; this prevents `last_target` confidence from being overwritten to zero and improves operator-facing confidence/infer diagnostics.
+- 2026-02-13 10:12 v1.16.43  Improved `/color` ClientAI runtime workflow with session-aware publish gating: browser now polls `/api/session` and skips advisory target publish while unarmed, reducing reject churn and making local infer/publish diagnostics stable.
+- 2026-02-13 09:35 v1.16.42  Fixed `/color` ClientAI runtime input-size mismatch discovered by browser automation probe (`Got 256 Expected 320`): runtime now prefers model input dimensions (with `cv451/yolov8n` 320 hint) and auto-recovers from ORT dimension errors.
+- 2026-02-13 08:48 v1.16.41  Added Safari ClientAI runtime hardening in `/color`: ORT WASM now uses explicit path/thread/proxy settings and UI status now exposes browser-local infer/publish counters + last error so ClientAI failures are visible instead of appearing as silent Pi fallback.
+- 2026-02-13 07:55 v1.16.40  Fixed `/color` ClientAI browser inference path by correcting YOLO output shape decode logic (`[1,84,8400]`/`[1,8400,84]`) and hardening ORT runtime script loading with retry/fallback; this addresses client-ai mode showing Pi metrics with no browser detections.
+- 2026-02-12 22:51 v1.16.39  Implemented real browser-side ClientAI runtime on `/color` (ORT model load + frame inference + advisory target publish) and added local fresh-detection overlay fallback so client-ai detection remains visible even when server target acceptance is unavailable.
+- 2026-02-12 22:38 v1.16.38  `/color` ClientAI-mode behavior fix: metrics header now reflects active runtime mode (`ClientAI` vs `Pi`), and target overlay in `client-ai` mode now uses validated `/api/vision/client-target/latest` snapshot with strict freshness gating to prevent stale/ghost box linger.
+- 2026-02-12 21:50 v1.16.37  Added ClientAI simulated iteration harness documentation (`clientai_static_image_sim.py`, `clientai_sim_lab.sh`) for rapid static-image red-ball performance checks and faster convergence without live camera dependence.
+- 2026-02-12 21:37 v1.16.36  Added ClientAI test-harness documentation updates: `/api/clientai` top-detection confidence fields (`last_target.top_conf/top_label`) and live probe workflow (`Server/ClientAI/clientai_perf_probe.sh`) for ball-in-view performance validation.
+- 2026-02-12 21:16 v1.16.35  Corrected `/color` infer-metric ownership labeling: Pi infer and ClientAI infer are now shown in separate rows to prevent false interpretation of Pi latency as Mac/browser ClientAI latency.
+- 2026-02-12 21:00 v1.16.34  Added `/color` automatic ClientAI capability heartbeat note so default browser-first policy (`client-ai`) activates without manual Apply after restart/reset.
+- 2026-02-12 20:58 v1.16.33  Changed ClientAI mode policy default to `client-ai` (browser-first) and kept deterministic capability-based fallback to `edge-ai`; updated smoke workflow to reset manual override after checks.
+- 2026-02-12 20:51 v1.16.32  Clarified `/color` metrics ownership visibility: `Vision/Stream Metrics` now displays runtime source suffix (`- Pi`/`- ClientAI`) and infer-label source tag to avoid confusion between Pi edge inference and browser ClientAI latency.
+- 2026-02-12 20:17 v1.16.31  Added telemetry API validated-target consumer surface (`GET /api/vision/client-target/latest`) and documented new ClientAI `tracking_consumer` eligibility/status visibility for downstream safe integration.
+- 2026-02-12 19:58 v1.16.30  Fixed longstanding `/color` video-resolution dial stale-state issue by hardening frontend `/video/config` re-sync behavior (multi-pass startup/post-apply + focus/visibility refresh) so selector consistently reflects persisted backend profile.
+- 2026-02-12 19:55 v1.16.29  Set persisted `/color` video profile default to `960x540` (instead of `640x360`) and documented `Default (960)` as baseline selector target for normal operation.
+- 2026-02-12 19:44 v1.16.28  Added ClientAI implementation testability note and smoke-check command (`Server/ClientAI/clientai_smoke_check.sh`) to reinforce early UI/basic functional verification gate.
+- 2026-02-12 19:41 v1.16.27  Updated viewer-role documentation after integrating ClientAI policy/status controls into tuned `/color` layout; reclassified `8080/webrtc_view.html` as secondary integration lane.
+- 2026-02-12 19:38 v1.16.26  Clarified viewer URL roles: `8081/color` as primary production operator UI, `8080/webrtc_view.html` as new ClientAI integration lane, and `8080/index.html` as legacy helper page.
 - 2026-02-12 18:30 v1.16.25  Added ClientAI Phase-A/B/C runtime documentation: new telemetry-service endpoints (`/api/clientai`, model-manifest/model stream, `/api/vision/client-target`) and browser-side inference overlay/publish path in `Server/web/webrtc_view.html`.
 - 2026-02-12 17:42 v1.16.24  Added cache-control hardening for Pi color-viewer runtime (`Cache-Control: no-store`) plus frontend delayed `/video/config` resync behavior to mitigate stale Safari resolution-profile UI after refresh.
 - 2026-02-12 17:33 v1.16.23  Added `/color` runtime note: video-profile apply now triggers immediate client-side WebRTC renegotiation so new publisher resolution is reflected without manual refresh in normal conditions.
