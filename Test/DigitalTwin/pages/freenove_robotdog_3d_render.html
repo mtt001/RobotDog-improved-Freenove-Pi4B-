@@ -8,8 +8,9 @@ Usage:
   1) Open this HTML in a modern browser with internet access (Three.js CDN import map).
   2) Use mouse drag/wheel to orbit/zoom/pan the 3D model.
   3) Use Walk/RELAX/S11 controls and the Servo Test panel to verify channel motion behavior.
-Version: v1.92 (2026-02-27 06:59)
+Version: v1.93 (2026-02-27 07:21)
 Revision History:
+- 2026-02-27 07:21 v1.93 - Entered firmware-mirror mode for walk gait: replaced independent phase/duty gait model with Pi `Control.py forWard()` math and leg index mapping (0/2 vs 1/3), fixed X/Y amplitudes (`12/6`), removed lateral gait compensation from walk path, and added mirror-state debug export.
 - 2026-02-27 06:59 v1.92 - Added gait-tuning debug controls for deterministic sweep validation (`stride/forward-speed/duty-factor`), exported anti-phase violation metrics in HIL report, and wired sweep-friendly stability telemetry hooks.
 - 2026-02-26 21:48 v1.91 - Overnight HIL alignment pass: switched walk to Pi-style diagonal phase pairing, set deterministic timestep to 0.01s with simulation tick counter, added phase-machine console debug, added extended JSON log/report export fields (`tick`, `stance`, `COM`, failure snapshots), and refined stability/contact/IMU gate behavior for autonomous multi-phase validation.
 - 2026-02-26 21:23 v1.90 - Added pre-MuJoCo HIL gates: deterministic fixed-step simulation loop with record/replay logs, quasi-static COM/support-polygon stability margin overlay, contact sanity checks (anti-skate/swing-clearance/penetration clamp), IMU envelope divergence detection, and CI-facing JSON report hooks.
@@ -840,12 +841,6 @@ Revision History:
         pitchVisualScale: 0.54,
         kneeVisualScale: 0.56,
       });
-      const WALK_DIAGONAL_PHASE = Object.freeze({
-        front_right: 0.0 * Math.PI,
-        rear_left: 0.0 * Math.PI,
-        front_left: 1.0 * Math.PI,
-        rear_right: 1.0 * Math.PI,
-      });
 
       function coordinateToAngleTutorial(x, y, z, l1 = 23, l2 = 55, l3 = 55) {
         const a = (Math.PI / 2) - Math.atan2(z, y);
@@ -867,39 +862,19 @@ Revision History:
         };
       }
 
-      function computeWalkJointSetFromTutorial(leg, gaitT, gaitOpt = null) {
-        const strideScale = Number(gaitOpt?.strideScale ?? 1);
-        const turnBias = Number(gaitOpt?.turnBias ?? 0);
-        const sideScale = (leg.side > 0) ? (1 + turnBias) : (1 - turnBias);
-        const stride = TUTORIAL_IK.strideX * THREE.MathUtils.clamp(strideScale * sideScale, 0.35, 1.8);
-        const phaseOffset = Number(gaitOpt?.phaseOffset ?? leg.phase ?? 0);
-        const theta = gaitT + phaseOffset;
-        const cycle = Math.PI * 2;
-        const u = ((((theta % cycle) + cycle) % cycle) / cycle);
-        const stanceRatio = THREE.MathUtils.clamp(TUTORIAL_IK.stanceRatio + Number(gaitTuneState.dutyFactorOffset || 0), 0.45, 0.8);
-        let footX = 0;
-        let footY = TUTORIAL_IK.baseHeight;
-        let swingGate = 0;
-        if (u < stanceRatio) {
-          const s = u / stanceRatio;
-          // Stance: smooth rearward sweep along virtual ground contact.
-          footX = stride * Math.cos(Math.PI * s);
-          // Keep stance almost level to reduce unnatural bounce.
-          footY = TUTORIAL_IK.baseHeight + (0.20 * Math.sin(Math.PI * s));
-        } else {
-          const sRaw = (u - stanceRatio) / (1 - stanceRatio);
-          // Swing: smooth forward recovery arc with lifted toe clearance.
-          footX = -stride * Math.cos(Math.PI * sRaw);
-          swingGate = Math.pow(Math.sin(Math.PI * sRaw), 1.25);
-          footY = TUTORIAL_IK.baseHeight - (TUTORIAL_IK.liftY * swingGate);
+      function computeWalkJointSetMirrorPi(leg, legIndex, thetaDeg) {
+        const thetaRad = THREE.MathUtils.degToRad(thetaDeg);
+        const thetaRadPair = THREE.MathUtils.degToRad(thetaDeg + 180);
+        let footX = 12 * Math.cos(thetaRad);
+        let footY = (6 * Math.sin(thetaRad)) + TUTORIAL_IK.baseHeight;
+        if ((legIndex % 2) === 1) {
+          footX = 12 * Math.cos(thetaRadPair);
+          footY = (6 * Math.sin(thetaRadPair)) + TUTORIAL_IK.baseHeight;
         }
-        footX += TUTORIAL_IK.xBias;
-        // Tutorial/Control.py convention: +Z is left side offset, -Z is right side offset.
-        // Keep lateral component small and mostly in swing phase to avoid crab-like gait.
-        const footZBase = (leg.side < 0) ? 10 : -10;
-        const latWave = Math.sin(Math.PI * 2 * u);
-        const lateralTerm = (0.72 * swingGate) + (0.38 * latWave);
-        const footZ = footZBase + ((leg.side < 0 ? 1 : -1) * TUTORIAL_IK.lateralSwing * lateralTerm);
+        if (footY > TUTORIAL_IK.baseHeight) footY = TUTORIAL_IK.baseHeight;
+        // Mirror Control.py fixed lateral offset per body side; no walk-time lateral modulation.
+        const footZ = (leg.side < 0) ? 10 : -10;
+        piMirrorState.legTargets[String(legIndex)] = { x: Number(footX), y: Number(footY), z: Number(footZ) };
         const ik = coordinateToAngleTutorial(footX, footY, footZ, TUTORIAL_IK.l1, TUTORIAL_IK.l2, TUTORIAL_IK.l3);
         const isLeft = leg.side < 0;
         const rollCmd = THREE.MathUtils.clamp(ik.a, 0, 180);                               // Joint1 / HAA
@@ -909,6 +884,9 @@ Revision History:
         const hipPitchVis = (pitchCmd - 90) * (isLeft ? -1 : 1) * TUTORIAL_IK.pitchVisualScale;
         const kneeVis = (kneeCmd - 90) * (isLeft ? -1 : 1) * TUTORIAL_IK.kneeVisualScale;
         const ankleVis = (0.20 * hipPitchVis) - (0.20 * kneeVis);
+        const swingGate = THREE.MathUtils.clamp((TUTORIAL_IK.baseHeight - footY) / 6.0, 0, 1);
+        const basePhaseU = ((((thetaDeg % 360) + 360) % 360) / 360);
+        const phaseU = ((legIndex % 2) === 1) ? ((basePhaseU + 0.5) % 1) : basePhaseU;
         return {
           rollCmd,
           pitchCmd,
@@ -920,7 +898,7 @@ Revision History:
           footX,
           footY,
           footZ,
-          phaseU: u,
+          phaseU,
           swingGate,
         };
       }
@@ -1306,10 +1284,10 @@ Revision History:
         });
         const legRigs = [];
         const legDefs = [
-          { key: 'front_right', x: CAD_GEOM.hipX, z: CAD_GEOM.hipZ, side: 1, channels: [11, 12, 13], tanSock: true, phase: WALK_DIAGONAL_PHASE.front_right },
-          { key: 'rear_right', x: -CAD_GEOM.hipX, z: CAD_GEOM.hipZ, side: 1, channels: [8, 9, 10], tanSock: false, phase: WALK_DIAGONAL_PHASE.rear_right },
-          { key: 'rear_left', x: -CAD_GEOM.hipX, z: -CAD_GEOM.hipZ, side: -1, channels: [7, 6, 5], tanSock: false, phase: WALK_DIAGONAL_PHASE.rear_left },
-          { key: 'front_left', x: CAD_GEOM.hipX, z: -CAD_GEOM.hipZ, side: -1, channels: [4, 3, 2], tanSock: true, phase: WALK_DIAGONAL_PHASE.front_left },
+          { key: 'front_right', x: CAD_GEOM.hipX, z: CAD_GEOM.hipZ, side: 1, channels: [11, 12, 13], tanSock: true },
+          { key: 'rear_right', x: -CAD_GEOM.hipX, z: CAD_GEOM.hipZ, side: 1, channels: [8, 9, 10], tanSock: false },
+          { key: 'rear_left', x: -CAD_GEOM.hipX, z: -CAD_GEOM.hipZ, side: -1, channels: [7, 6, 5], tanSock: false },
+          { key: 'front_left', x: CAD_GEOM.hipX, z: -CAD_GEOM.hipZ, side: -1, channels: [4, 3, 2], tanSock: true },
         ];
 
         for (const leg of legDefs) {
@@ -1377,7 +1355,6 @@ Revision History:
 
           legRigs.push({
             key: leg.key,
-            phase: leg.phase,
             side: leg.side,
             channels: {
               roll: leg.channels[0],
@@ -1516,10 +1493,12 @@ Revision History:
         lastWallSec: 0,
         maxStepsPerFrame: 8,
       };
-      const gaitTuneState = {
-        strideScale: 1.0,
-        forwardSpeedScale: 1.0,
-        dutyFactorOffset: 0.0,
+      const piMirrorState = {
+        thetaDeg: 90,
+        speedDeg: 8,
+        minThetaDeg: 90,
+        maxThetaDeg: 450,
+        legTargets: {},
       };
       const replayState = {
         recording: false,
@@ -1981,25 +1960,21 @@ Revision History:
           return true;
         },
         getGaitTuning: () => ({
-          strideScale: Number(gaitTuneState.strideScale || 1),
-          forwardSpeedScale: Number(gaitTuneState.forwardSpeedScale || 1),
-          dutyFactorOffset: Number(gaitTuneState.dutyFactorOffset || 0),
+          strideScale: 1.0,
+          forwardSpeedScale: 1.0,
+          dutyFactorOffset: 0.0,
         }),
-        setGaitTuning: (cfg = {}) => {
-          const nextStride = Number(cfg.strideScale ?? gaitTuneState.strideScale);
-          const nextSpeed = Number(cfg.forwardSpeedScale ?? gaitTuneState.forwardSpeedScale);
-          const nextDuty = Number(cfg.dutyFactorOffset ?? gaitTuneState.dutyFactorOffset);
-          gaitTuneState.strideScale = THREE.MathUtils.clamp(Number.isFinite(nextStride) ? nextStride : 1.0, 0.6, 1.4);
-          gaitTuneState.forwardSpeedScale = THREE.MathUtils.clamp(Number.isFinite(nextSpeed) ? nextSpeed : 1.0, 0.6, 1.4);
-          gaitTuneState.dutyFactorOffset = THREE.MathUtils.clamp(Number.isFinite(nextDuty) ? nextDuty : 0.0, -0.12, 0.12);
-          return window.__robotDogDebug.getGaitTuning();
-        },
-        resetGaitTuning: () => {
-          gaitTuneState.strideScale = 1.0;
-          gaitTuneState.forwardSpeedScale = 1.0;
-          gaitTuneState.dutyFactorOffset = 0.0;
-          return window.__robotDogDebug.getGaitTuning();
-        },
+        setGaitTuning: () => window.__robotDogDebug.getGaitTuning(),
+        resetGaitTuning: () => window.__robotDogDebug.getGaitTuning(),
+        getPiMirrorState: () => ({
+          thetaDeg: Number(piMirrorState.thetaDeg || 0),
+          speedDeg: Number(piMirrorState.speedDeg || 0),
+          height: Number(TUTORIAL_IK.baseHeight || 0),
+          xAmp: 12,
+          yAmp: 6,
+          grouping: ['leg0+leg2', 'leg1+leg3'],
+          legTargets: { ...piMirrorState.legTargets },
+        }),
       };
       const legRigs = Array.isArray(dogRoot?.userData?.legRigs) ? dogRoot.userData.legRigs : [];
       const tailRig = dogRoot?.userData?.tailRig || null;
@@ -2266,7 +2241,7 @@ Revision History:
         simState.tick += 1;
         const t = simState.simTimeSec;
         tickDogDemo(t);
-        const linearSpeed = 0.32 * Number(gaitTuneState.forwardSpeedScale || 1);
+        const linearSpeed = 0.32;
         const yawRateDeg = 58;
         if (!replayState.replaying) {
           switch (dogActionState.mode) {
@@ -2279,14 +2254,14 @@ Revision History:
             default: break;
           }
         }
-        const gaitDir = (dogActionState.mode === DOG_ACTION.BACKWARD) ? -1 : 1;
-        const gaitCadence = TUTORIAL_IK.cadence * Number(gaitTuneState.forwardSpeedScale || 1);
-        const gaitT = t * gaitCadence * gaitDir;
-        let gaitStrideScale = Number(gaitTuneState.strideScale || 1);
-        let gaitTurnBias = 0;
-        if (dogActionState.mode === DOG_ACTION.TURN_LEFT) gaitTurnBias = 0.12;
-        if (dogActionState.mode === DOG_ACTION.TURN_RIGHT) gaitTurnBias = -0.12;
-        if (dogActionState.mode === DOG_ACTION.LEFT || dogActionState.mode === DOG_ACTION.RIGHT) gaitStrideScale = 0.82;
+        const isForwardLike = (dogActionState.mode === DOG_ACTION.FORWARD || dogActionState.mode === DOG_ACTION.BACKWARD || dogActionState.mode === DOG_ACTION.LEFT || dogActionState.mode === DOG_ACTION.RIGHT || dogActionState.mode === DOG_ACTION.STOP);
+        if (!replayState.replaying && isForwardLike) {
+          const dirSign = (dogActionState.mode === DOG_ACTION.BACKWARD) ? -1 : 1;
+          piMirrorState.thetaDeg += dirSign * piMirrorState.speedDeg;
+          if (piMirrorState.thetaDeg > piMirrorState.maxThetaDeg) piMirrorState.thetaDeg = piMirrorState.minThetaDeg;
+          if (piMirrorState.thetaDeg < piMirrorState.minThetaDeg) piMirrorState.thetaDeg = piMirrorState.maxThetaDeg;
+        }
+        const gaitT = THREE.MathUtils.degToRad(Number(piMirrorState.thetaDeg || 90));
         const servoCommandDeg = {};
         const legVisualState = {};
         const gaitPhaseState = {};
@@ -2370,7 +2345,7 @@ Revision History:
               servoTestCommands[String(ch)] = Number(servoTestState.currentDeg);
             });
           }
-          legRigs.forEach((leg) => {
+          legRigs.forEach((leg, legIndex) => {
             let rollDeg;
             let hipPitchDeg;
             let kneeDeg;
@@ -2397,12 +2372,7 @@ Revision History:
               }
               gaitPhaseState[leg.key] = { phaseU: 0, swingGate: 0, isStance: true };
             } else if (isWalkMode) {
-              const phaseOffset = Number(leg.phase ?? 0);
-              const jointSet = computeWalkJointSetFromTutorial(leg, gaitT, {
-                strideScale: gaitStrideScale,
-                turnBias: gaitTurnBias,
-                phaseOffset,
-              });
+              const jointSet = computeWalkJointSetMirrorPi(leg, legIndex, piMirrorState.thetaDeg);
               rollDeg = jointSet.rollVis;
               hipPitchDeg = jointSet.hipPitchVis;
               kneeDeg = jointSet.kneeVis;
@@ -2463,7 +2433,7 @@ Revision History:
         _actionYawQ.setFromAxisAngle(new THREE.Vector3(0, 1, 0), THREE.MathUtils.degToRad(dogActionState.yawDeg));
         _dogBodySceneQ.copy(_actionYawQ).multiply(_imuSceneQ);
         dogRoot.quaternion.copy(_dogBodySceneQ);
-        const walkBodyBob = (isWalkMode && !isServoTestRunning) ? (0.010 * Math.sin(gaitT * 2.0)) : 0;
+        const walkBodyBob = 0;
         dogRoot.position.set(
           dogRootBasePose.x + Number(dogActionState.posX || 0),
           dogRootBasePose.y + walkBodyBob,
