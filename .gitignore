@@ -23,12 +23,14 @@ ENV/
 *.swp
 *.swo
 *~
+*.playwright
 
 # Images
 *.jpg
 *.jpeg
 *.JPG
 *.JPEG
+*.png
 
 # Project temp/output folders
 Temp/
@@ -46,3 +48,17 @@ Backup/
 Backup.textClipping
 Client(Original)/
 Server(Original)/
+
+# Build / package outputs
+node_modules/
+dist/
+build/
+*.zip
+*.mp4
+
+# Digital Twin generated reports
+Test/DigitalTwin/logs/
+
+# Reporting exceptions
+!AI_reports/latest_status.json
+!AI_reports/latest_status.md

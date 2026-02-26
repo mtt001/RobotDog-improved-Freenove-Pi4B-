@@ -8,8 +8,9 @@ Usage:
   1) Open this HTML in a modern browser with internet access (Three.js CDN import map).
   2) Use mouse drag/wheel to orbit/zoom/pan the 3D model.
   3) Use Walk/RELAX/S11 controls and the Servo Test panel to verify channel motion behavior.
-Version: v1.91 (2026-02-26 21:48)
+Version: v1.92 (2026-02-27 06:59)
 Revision History:
+- 2026-02-27 06:59 v1.92 - Added gait-tuning debug controls for deterministic sweep validation (`stride/forward-speed/duty-factor`), exported anti-phase violation metrics in HIL report, and wired sweep-friendly stability telemetry hooks.
 - 2026-02-26 21:48 v1.91 - Overnight HIL alignment pass: switched walk to Pi-style diagonal phase pairing, set deterministic timestep to 0.01s with simulation tick counter, added phase-machine console debug, added extended JSON log/report export fields (`tick`, `stance`, `COM`, failure snapshots), and refined stability/contact/IMU gate behavior for autonomous multi-phase validation.
 - 2026-02-26 21:23 v1.90 - Added pre-MuJoCo HIL gates: deterministic fixed-step simulation loop with record/replay logs, quasi-static COM/support-polygon stability margin overlay, contact sanity checks (anti-skate/swing-clearance/penetration clamp), IMU envelope divergence detection, and CI-facing JSON report hooks.
 - 2026-02-26 20:02 v1.83 - Disabled all IMU polling/recovery HTTP traffic when `Apply IMU` is OFF to avoid telemetry contention with other pages; IMU status now explicitly shows `poll paused`.
@@ -875,7 +876,7 @@ Revision History:
         const theta = gaitT + phaseOffset;
         const cycle = Math.PI * 2;
         const u = ((((theta % cycle) + cycle) % cycle) / cycle);
-        const stanceRatio = THREE.MathUtils.clamp(TUTORIAL_IK.stanceRatio, 0.45, 0.8);
+        const stanceRatio = THREE.MathUtils.clamp(TUTORIAL_IK.stanceRatio + Number(gaitTuneState.dutyFactorOffset || 0), 0.45, 0.8);
         let footX = 0;
         let footY = TUTORIAL_IK.baseHeight;
         let swingGate = 0;
@@ -1515,6 +1516,11 @@ Revision History:
         lastWallSec: 0,
         maxStepsPerFrame: 8,
       };
+      const gaitTuneState = {
+        strideScale: 1.0,
+        forwardSpeedScale: 1.0,
+        dutyFactorOffset: 0.0,
+      };
       const replayState = {
         recording: false,
         replaying: false,
@@ -1544,6 +1550,7 @@ Revision History:
         supportPoly: [],
         stanceLegKeys: [],
         comProj: { x: 0, z: 0 },
+        antiPhaseViolations: 0,
         antiSkateViolations: 0,
         swingClearViolations: 0,
         penetrationViolations: 0,
@@ -1928,6 +1935,7 @@ Revision History:
           failPhaseLeg: String(hilGateState.failPhaseLeg || ''),
           supportPolySize: Array.isArray(hilGateState.supportPoly) ? hilGateState.supportPoly.length : 0,
           stanceLegKeys: Array.isArray(hilGateState.stanceLegKeys) ? [...hilGateState.stanceLegKeys] : [],
+          antiPhaseViolations: Number(hilGateState.antiPhaseViolations || 0),
           antiSkateViolations: Number(hilGateState.antiSkateViolations || 0),
           swingClearViolations: Number(hilGateState.swingClearViolations || 0),
           penetrationViolations: Number(hilGateState.penetrationViolations || 0),
@@ -1971,6 +1979,26 @@ Revision History:
           replayState.frames = [];
           replayState.index = 0;
           return true;
+        },
+        getGaitTuning: () => ({
+          strideScale: Number(gaitTuneState.strideScale || 1),
+          forwardSpeedScale: Number(gaitTuneState.forwardSpeedScale || 1),
+          dutyFactorOffset: Number(gaitTuneState.dutyFactorOffset || 0),
+        }),
+        setGaitTuning: (cfg = {}) => {
+          const nextStride = Number(cfg.strideScale ?? gaitTuneState.strideScale);
+          const nextSpeed = Number(cfg.forwardSpeedScale ?? gaitTuneState.forwardSpeedScale);
+          const nextDuty = Number(cfg.dutyFactorOffset ?? gaitTuneState.dutyFactorOffset);
+          gaitTuneState.strideScale = THREE.MathUtils.clamp(Number.isFinite(nextStride) ? nextStride : 1.0, 0.6, 1.4);
+          gaitTuneState.forwardSpeedScale = THREE.MathUtils.clamp(Number.isFinite(nextSpeed) ? nextSpeed : 1.0, 0.6, 1.4);
+          gaitTuneState.dutyFactorOffset = THREE.MathUtils.clamp(Number.isFinite(nextDuty) ? nextDuty : 0.0, -0.12, 0.12);
+          return window.__robotDogDebug.getGaitTuning();
+        },
+        resetGaitTuning: () => {
+          gaitTuneState.strideScale = 1.0;
+          gaitTuneState.forwardSpeedScale = 1.0;
+          gaitTuneState.dutyFactorOffset = 0.0;
+          return window.__robotDogDebug.getGaitTuning();
         },
       };
       const legRigs = Array.isArray(dogRoot?.userData?.legRigs) ? dogRoot.userData.legRigs : [];
@@ -2219,8 +2247,8 @@ Revision History:
           hilMarginEl.textContent = `HIL Margin: ${m.toFixed(4)} (thr ${thr.toFixed(4)}) | stance=${(hilGateState.stanceLegKeys || []).join(',') || '--'}`;
         }
         if (hilContactEl) {
-          hilContactEl.className = ((hilGateState.antiSkateViolations + hilGateState.swingClearViolations + hilGateState.penetrationViolations) === 0) ? 'ok' : 'warn';
-          hilContactEl.textContent = `HIL Contact: anti-skate=${hilGateState.antiSkateViolations} swing-clear=${hilGateState.swingClearViolations} penetrate=${hilGateState.penetrationViolations}`;
+          hilContactEl.className = ((hilGateState.antiPhaseViolations + hilGateState.antiSkateViolations + hilGateState.swingClearViolations + hilGateState.penetrationViolations) === 0) ? 'ok' : 'warn';
+          hilContactEl.textContent = `HIL Contact: anti-phase=${hilGateState.antiPhaseViolations} anti-skate=${hilGateState.antiSkateViolations} swing-clear=${hilGateState.swingClearViolations} penetrate=${hilGateState.penetrationViolations}`;
         }
         if (hilDivergenceEl) {
           const last = (hilGateState.divergenceEvents || []).length
@@ -2238,7 +2266,7 @@ Revision History:
         simState.tick += 1;
         const t = simState.simTimeSec;
         tickDogDemo(t);
-        const linearSpeed = 0.32;
+        const linearSpeed = 0.32 * Number(gaitTuneState.forwardSpeedScale || 1);
         const yawRateDeg = 58;
         if (!replayState.replaying) {
           switch (dogActionState.mode) {
@@ -2252,8 +2280,9 @@ Revision History:
           }
         }
         const gaitDir = (dogActionState.mode === DOG_ACTION.BACKWARD) ? -1 : 1;
-        const gaitT = t * TUTORIAL_IK.cadence * gaitDir;
-        let gaitStrideScale = 1;
+        const gaitCadence = TUTORIAL_IK.cadence * Number(gaitTuneState.forwardSpeedScale || 1);
+        const gaitT = t * gaitCadence * gaitDir;
+        let gaitStrideScale = Number(gaitTuneState.strideScale || 1);
         let gaitTurnBias = 0;
         if (dogActionState.mode === DOG_ACTION.TURN_LEFT) gaitTurnBias = 0.12;
         if (dogActionState.mode === DOG_ACTION.TURN_RIGHT) gaitTurnBias = -0.12;
@@ -2442,6 +2471,25 @@ Revision History:
         );
         dogRoot.updateMatrixWorld(true);
 
+        const phaseDiffCycle = (a, b) => {
+          let d = Math.abs(Number(a || 0) - Number(b || 0));
+          d = d % 1;
+          return d > 0.5 ? 1 - d : d;
+        };
+        const fr = gaitPhaseState.front_right?.phaseU;
+        const rl = gaitPhaseState.rear_left?.phaseU;
+        const fl = gaitPhaseState.front_left?.phaseU;
+        const rr = gaitPhaseState.rear_right?.phaseU;
+        if ([fr, rl, fl, rr].every((v) => Number.isFinite(v))) {
+          const diag1Err = phaseDiffCycle(fr, rl);
+          const diag2Err = phaseDiffCycle(fl, rr);
+          const antiErr = Math.abs(phaseDiffCycle(fr, fl) - 0.5);
+          if (diag1Err > 0.12 || diag2Err > 0.12 || antiErr > 0.12) {
+            hilGateState.antiPhaseViolations += 1;
+            hilGateState.contactFlags.push(`anti_phase:${diag1Err.toFixed(3)}:${diag2Err.toFixed(3)}:${antiErr.toFixed(3)}`);
+          }
+        }
+
         _stancePts.length = 0;
         _allFootY.length = 0;
         hilGateState.contactFlags = [];
@@ -2516,7 +2564,7 @@ Revision History:
         hilGateState.supportPoly = supportPoly;
         hilGateState.stanceLegKeys = _stancePts.map((p) => p.legKey);
         hilGateState.comProj = comProj;
-        if ((hilGateState.antiSkateViolations + hilGateState.swingClearViolations + hilGateState.penetrationViolations) > 0) {
+        if ((hilGateState.antiPhaseViolations + hilGateState.antiSkateViolations + hilGateState.swingClearViolations + hilGateState.penetrationViolations) > 0) {
           unstable = true;
           failReason = failReason || 'contact_violation';
         }
