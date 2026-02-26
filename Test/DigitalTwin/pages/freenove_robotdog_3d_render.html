@@ -8,8 +8,9 @@ Usage:
   1) Open this HTML in a modern browser with internet access (Three.js CDN import map).
   2) Use mouse drag/wheel to orbit/zoom/pan the 3D model.
   3) Use Walk/RELAX/S11 controls and the Servo Test panel to verify channel motion behavior.
-Version: v1.93 (2026-02-27 07:21)
+Version: v1.94 (2026-02-27 07:37)
 Revision History:
+- 2026-02-27 07:37 v1.94 - Added GAIT-DEBUG OVERLAY mode: bottom 2D canvas showing raw firmware gait math traces (`X1/Y1`, `X2/Y2`), clamp line, live theta/step/stance status, current-point markers, and semi-transparent ghost-leg sketch; toggle with `G` key.
 - 2026-02-27 07:21 v1.93 - Entered firmware-mirror mode for walk gait: replaced independent phase/duty gait model with Pi `Control.py forWard()` math and leg index mapping (0/2 vs 1/3), fixed X/Y amplitudes (`12/6`), removed lateral gait compensation from walk path, and added mirror-state debug export.
 - 2026-02-27 06:59 v1.92 - Added gait-tuning debug controls for deterministic sweep validation (`stride/forward-speed/duty-factor`), exported anti-phase violation metrics in HIL report, and wired sweep-friendly stability telemetry hooks.
 - 2026-02-26 21:48 v1.91 - Overnight HIL alignment pass: switched walk to Pi-style diagonal phase pairing, set deterministic timestep to 0.01s with simulation tick counter, added phase-machine console debug, added extended JSON log/report export fields (`tick`, `stance`, `COM`, failure snapshots), and refined stability/contact/IMU gate behavior for autonomous multi-phase validation.
@@ -471,6 +472,26 @@ Revision History:
         padding: 6px 10px;
         cursor: pointer;
       }
+      #gaitDebugPanel {
+        position: absolute;
+        left: 12px;
+        bottom: 12px;
+        z-index: 16;
+        width: min(760px, calc(100vw - 24px));
+        height: 216px;
+        border-radius: 10px;
+        border: 1px solid rgba(82, 136, 194, 0.58);
+        background: rgba(7, 14, 25, 0.86);
+        box-shadow: 0 8px 28px rgba(0, 0, 0, 0.30);
+        overflow: hidden;
+      }
+      #gaitDebugPanel.hidden {
+        display: none;
+      }
+      #gaitDebugCanvas {
+        width: 100%;
+        height: 100%;
+      }
       canvas { display: block; }
     </style>
   </head>
@@ -485,7 +506,7 @@ Revision History:
       </div>
       <div id="buildBadge">
         <div><span class="k">File:</span> Test/DigitalTwin/pages/freenove_robotdog_3d_render.html</div>
-        <div><span class="k">Build:</span> v1.91 | 2026-02-26 21:48 CST</div>
+        <div><span class="k">Build:</span> v1.94 | 2026-02-27 07:37 CST</div>
       </div>
       <div id="hud">
         <div>ClientAI Jack Russell model on Freenove page. Drag=orbit, wheel=zoom, right-drag=pan.</div>
@@ -581,6 +602,9 @@ Revision History:
           <button id="dogDemoBtn" class="dog-btn demo" type="button">Demo</button>
         </div>
         <div id="dogActionStatus">Action: stop | Beep: off | LED: off</div>
+      </div>
+      <div id="gaitDebugPanel">
+        <canvas id="gaitDebugCanvas" width="760" height="216"></canvas>
       </div>
     </div>
     <script type="importmap">
@@ -1473,6 +1497,14 @@ Revision History:
       const dogLedBtn = document.getElementById('dogLedBtn');
       const dogDemoBtn = document.getElementById('dogDemoBtn');
       const dogActionStatusEl = document.getElementById('dogActionStatus');
+      const gaitDebugPanelEl = document.getElementById('gaitDebugPanel');
+      const gaitDebugCanvasEl = document.getElementById('gaitDebugCanvas');
+      const gaitDebugCtx = gaitDebugCanvasEl?.getContext('2d') || null;
+      const gaitDebugState = {
+        visible: true,
+        width: 760,
+        height: 216,
+      };
       function layoutLeftStack() {
         if (!hudEl || !controlsEl || !servoTestDockEl) return;
         const gutter = 10;
@@ -1480,6 +1512,162 @@ Revision History:
         controlsEl.style.top = `${controlsTop}px`;
         const dockTop = controlsTop + controlsEl.offsetHeight + gutter;
         servoTestDockEl.style.top = `${dockTop}px`;
+      }
+      function syncGaitDebugCanvasSize() {
+        if (!gaitDebugPanelEl || !gaitDebugCanvasEl) return;
+        const w = Math.max(360, Math.floor(gaitDebugPanelEl.clientWidth));
+        const h = Math.max(180, Math.floor(gaitDebugPanelEl.clientHeight));
+        if (gaitDebugCanvasEl.width !== w) gaitDebugCanvasEl.width = w;
+        if (gaitDebugCanvasEl.height !== h) gaitDebugCanvasEl.height = h;
+        gaitDebugState.width = w;
+        gaitDebugState.height = h;
+      }
+      function computePiRawGait(thetaDeg, heightVal) {
+        const thetaRad = THREE.MathUtils.degToRad(thetaDeg);
+        const thetaRadB = THREE.MathUtils.degToRad(thetaDeg + 180);
+        const x1 = 12 * Math.cos(thetaRad);
+        const y1Raw = (6 * Math.sin(thetaRad)) + heightVal;
+        const x2 = 12 * Math.cos(thetaRadB);
+        const y2Raw = (6 * Math.sin(thetaRadB)) + heightVal;
+        return {
+          x1,
+          y1Raw,
+          y1Clamped: Math.min(heightVal, y1Raw),
+          x2,
+          y2Raw,
+          y2Clamped: Math.min(heightVal, y2Raw),
+          height: heightVal,
+        };
+      }
+      function drawRawGhostLeg(ctx, rootX, rootY, footX, footY, color) {
+        const upperLen = 46;
+        const lowerLen = 46;
+        const dx = footX - rootX;
+        const dy = footY - rootY;
+        const dist = Math.max(1e-6, Math.min(upperLen + lowerLen - 0.2, Math.hypot(dx, dy)));
+        const dir = Math.atan2(dy, dx);
+        const c = (upperLen * upperLen + dist * dist - lowerLen * lowerLen) / (2 * upperLen * dist);
+        const elbow = Math.acos(THREE.MathUtils.clamp(c, -1, 1));
+        const bend = dir + elbow;
+        const kneeX = rootX + (upperLen * Math.cos(bend));
+        const kneeY = rootY + (upperLen * Math.sin(bend));
+        ctx.strokeStyle = color;
+        ctx.lineWidth = 7;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(rootX, rootY);
+        ctx.lineTo(kneeX, kneeY);
+        ctx.lineTo(footX, footY);
+        ctx.stroke();
+        ctx.fillStyle = color;
+        ctx.beginPath();
+        ctx.arc(rootX, rootY, 5, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(kneeX, kneeY, 4, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(footX, footY, 5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      function drawGaitDebugOverlay() {
+        if (!gaitDebugCtx || !gaitDebugCanvasEl || !gaitDebugPanelEl) return;
+        gaitDebugPanelEl.classList.toggle('hidden', !gaitDebugState.visible);
+        if (!gaitDebugState.visible) return;
+        syncGaitDebugCanvasSize();
+        const ctx = gaitDebugCtx;
+        const w = gaitDebugCanvasEl.width;
+        const h = gaitDebugCanvasEl.height;
+        ctx.clearRect(0, 0, w, h);
+        ctx.fillStyle = 'rgba(5, 12, 23, 0.92)';
+        ctx.fillRect(0, 0, w, h);
+
+        const math = computePiRawGait(Number(piMirrorState.thetaDeg || 90), Number(TUTORIAL_IK.baseHeight || 99));
+        const chart = { x: 12, y: 12, w: Math.floor(w * 0.58), h: h - 24 };
+        const xMin = -13;
+        const xMax = 13;
+        const yMin = math.height - 6.8;
+        const yMax = math.height + 6.8;
+        const mapX = (x) => chart.x + (((x - xMin) / (xMax - xMin)) * chart.w);
+        const mapY = (y) => chart.y + chart.h - (((y - yMin) / (yMax - yMin)) * chart.h);
+        const clampY = mapY(math.height);
+        ctx.strokeStyle = 'rgba(120, 145, 177, 0.52)';
+        ctx.lineWidth = 1;
+        ctx.strokeRect(chart.x, chart.y, chart.w, chart.h);
+        ctx.strokeStyle = 'rgba(255, 224, 137, 0.85)';
+        ctx.beginPath();
+        ctx.moveTo(chart.x, clampY);
+        ctx.lineTo(chart.x + chart.w, clampY);
+        ctx.stroke();
+        ctx.fillStyle = 'rgba(255, 224, 137, 0.95)';
+        ctx.font = '12px Avenir Next, Segoe UI, sans-serif';
+        ctx.fillText(`Clamp Y=${math.height.toFixed(1)}`, chart.x + 8, clampY - 6);
+
+        const drawRawPath = (color, phaseDeg = 0) => {
+          ctx.strokeStyle = color;
+          ctx.lineWidth = 1.8;
+          ctx.beginPath();
+          for (let deg = 0; deg <= 360; deg += 2) {
+            const r = THREE.MathUtils.degToRad(deg + phaseDeg);
+            const px = 12 * Math.cos(r);
+            const py = (6 * Math.sin(r)) + math.height;
+            const sx = mapX(px);
+            const sy = mapY(py);
+            if (deg === 0) ctx.moveTo(sx, sy);
+            else ctx.lineTo(sx, sy);
+          }
+          ctx.stroke();
+        };
+        drawRawPath('rgba(82, 212, 255, 0.92)', 0);
+        drawRawPath('rgba(255, 154, 74, 0.92)', 180);
+
+        const dot = (x, y, color, radius = 4) => {
+          ctx.fillStyle = color;
+          ctx.beginPath();
+          ctx.arc(mapX(x), mapY(y), radius, 0, Math.PI * 2);
+          ctx.fill();
+        };
+        dot(math.x1, math.y1Clamped, '#55d8ff', 4.5);
+        dot(math.x2, math.y2Clamped, '#ffa45a', 4.5);
+        dot(math.x1, math.y1Raw, 'rgba(85,216,255,0.55)', 2.4);
+        dot(math.x2, math.y2Raw, 'rgba(255,164,90,0.55)', 2.4);
+
+        const infoX = chart.x + chart.w + 18;
+        ctx.fillStyle = '#d9ebff';
+        ctx.font = 'bold 14px Avenir Next, Segoe UI, sans-serif';
+        ctx.fillText('GAIT-DEBUG OVERLAY (raw firmware math)', infoX, 24);
+        ctx.font = '13px Avenir Next, Segoe UI, sans-serif';
+        ctx.fillText(`Theta: ${Number(piMirrorState.thetaDeg || 0).toFixed(1)} deg`, infoX, 48);
+        ctx.fillText(`Step: ${Number(piMirrorState.speedDeg || 0).toFixed(1)} deg/tick`, infoX, 68);
+        const pairAStance = math.y1Clamped >= (math.height - 1e-6);
+        const pairBStance = math.y2Clamped >= (math.height - 1e-6);
+        ctx.fillText(`Pair stance: [0+2]=${pairAStance ? 'YES' : 'NO'}  [1+3]=${pairBStance ? 'YES' : 'NO'}`, infoX, 88);
+        ctx.fillStyle = '#9fc2ea';
+        ctx.fillText(`X1,Y1(raw->clamp)=(${math.x1.toFixed(2)}, ${math.y1Raw.toFixed(2)} -> ${math.y1Clamped.toFixed(2)})`, infoX, 108);
+        ctx.fillText(`X2,Y2(raw->clamp)=(${math.x2.toFixed(2)}, ${math.y2Raw.toFixed(2)} -> ${math.y2Clamped.toFixed(2)})`, infoX, 126);
+        ctx.fillText(`Toggle: press 'G'`, infoX, 146);
+
+        // Optional ghost-leg rendering in panel space, using raw body-frame math only.
+        const ghostBaseX = infoX + 34;
+        const ghostBaseY = h - 60;
+        const scaleX = 5.6;
+        const scaleY = 9.0;
+        drawRawGhostLeg(
+          ctx,
+          ghostBaseX,
+          ghostBaseY - 36,
+          ghostBaseX + (math.x1 * scaleX * 0.35),
+          ghostBaseY + ((math.y1Raw - math.height) * scaleY),
+          'rgba(85, 216, 255, 0.52)',
+        );
+        drawRawGhostLeg(
+          ctx,
+          ghostBaseX + 94,
+          ghostBaseY - 36,
+          ghostBaseX + 94 + (math.x2 * scaleX * 0.35),
+          ghostBaseY + ((math.y2Raw - math.height) * scaleY),
+          'rgba(255, 164, 90, 0.50)',
+        );
       }
       if (cadGeomInfoEl) {
         cadGeomInfoEl.innerHTML = `<span class="k">Geom Bind:</span> body=${CAD_MEASURED_MM.bodyLength}/${CAD_MEASURED_MM.bodyWidth}/${CAD_MEASURED_MM.bodyHeight}mm, L1/L2=${CAD_MEASURED_MM.upperLegLength}/${CAD_MEASURED_MM.lowerLegLength}mm, hip=${CAD_MEASURED_MM.hipOffsetX}/${CAD_MEASURED_MM.hipOffsetY}mm`;
@@ -1686,6 +1874,11 @@ Revision History:
         }
         startDogDemo(nowSec);
       });
+      window.addEventListener('keydown', (ev) => {
+        const tag = String(ev?.target?.tagName || '').toUpperCase();
+        if (tag === 'INPUT' || tag === 'TEXTAREA' || ev?.target?.isContentEditable) return;
+        if (String(ev.key || '').toLowerCase() === 'g') gaitDebugState.visible = !gaitDebugState.visible;
+      });
 
       function setServoTestStatusText(msg, isErr = false) {
         if (!servoTestStatusEl) return;
@@ -1804,6 +1997,7 @@ Revision History:
       setServoTestEnabled(true);
       setServoTestStatusText('Servo Test idle (temp model)');
       layoutLeftStack();
+      syncGaitDebugCanvasSize();
 
       scene.add(new THREE.HemisphereLight(0x9fc4ff, 0x0b1120, 0.84));
       const key = new THREE.DirectionalLight(0xf8fbff, 1.30);
@@ -2679,6 +2873,7 @@ Revision History:
           const zUp = _poseScenePos.y;
           poseReadoutEl.textContent = `Pose ENU XYZ=(${xEast.toFixed(3)}, ${yNorth.toFixed(3)}, ${zUp.toFixed(3)}) | FLU RPY=(${radToDeg(_poseFluEuler.x).toFixed(1)}°, ${radToDeg(_poseFluEuler.y).toFixed(1)}°, ${radToDeg(_poseFluEuler.z).toFixed(1)}°)`;
         }
+        drawGaitDebugOverlay();
         controls.update();
         renderer.clear();
         renderer.render(scene, camera);
@@ -2704,6 +2899,7 @@ Revision History:
 
       window.addEventListener('resize', () => {
         layoutLeftStack();
+        syncGaitDebugCanvasSize();
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
