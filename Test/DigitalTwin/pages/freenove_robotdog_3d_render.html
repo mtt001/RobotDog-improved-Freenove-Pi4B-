@@ -8,8 +8,9 @@ Usage:
   1) Open this HTML in a modern browser with internet access (Three.js CDN import map).
   2) Use mouse drag/wheel to orbit/zoom/pan the 3D model.
   3) Use Walk/RELAX/S11 controls and the Servo Test panel to verify channel motion behavior.
-Version: v1.98 (2026-02-27 08:40)
+Version: v1.99 (2026-02-27 08:43)
 Revision History:
+- 2026-02-27 08:43 v1.99 - Increased CG label readability, added visible body COM marker on the dog model, and added thin dashed vertical drop-line from body COM to ground CG mark.
 - 2026-02-27 08:40 v1.98 - Fixed gait-debug UI overlap by relocating top toolbar away from text region and moved ghost-leg drawing anchor to bottom-right of overlay panel.
 - 2026-02-27 08:23 v1.97 - Labeled the HIL COM ground marker with `CG` text centered in the red circle for clearer identification.
 - 2026-02-27 08:21 v1.96 - Improved gait-debug overlay layout to prevent text/ghost overlap and added live `Step deg/tick` speed dial control (default slower for visibility) with real-time gait update.
@@ -554,7 +555,7 @@ Revision History:
       </div>
       <div id="buildBadge">
         <div><span class="k">File:</span> Test/DigitalTwin/pages/freenove_robotdog_3d_render.html</div>
-        <div><span class="k">Build:</span> v1.98 | 2026-02-27 08:40 CST</div>
+        <div><span class="k">Build:</span> v1.99 | 2026-02-27 08:43 CST</div>
       </div>
       <div id="hud">
         <div>ClientAI Jack Russell model on Freenove page. Drag=orbit, wheel=zoom, right-drag=pan.</div>
@@ -2125,6 +2126,12 @@ Revision History:
         new THREE.LineBasicMaterial({ color: 0x54ffb0, transparent: true, opacity: 0.90 }),
       );
       hilOverlayGroup.add(hilSupportLine);
+      const hilComDropLine = new THREE.Line(
+        new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0.30, 0), new THREE.Vector3(0, 0.004, 0)]),
+        new THREE.LineDashedMaterial({ color: 0xff9c9c, transparent: true, opacity: 0.92, dashSize: 0.018, gapSize: 0.014 }),
+      );
+      hilComDropLine.computeLineDistances();
+      hilOverlayGroup.add(hilComDropLine);
       const hilComMarker = new THREE.Mesh(
         new THREE.CircleGeometry(0.022, 20),
         new THREE.MeshBasicMaterial({ color: 0xff6868, transparent: true, opacity: 0.92, side: THREE.DoubleSide }),
@@ -2133,25 +2140,25 @@ Revision History:
       hilComMarker.position.set(0, 0.004, 0);
       hilOverlayGroup.add(hilComMarker);
       const hilCgLabelCanvas = document.createElement('canvas');
-      hilCgLabelCanvas.width = 64;
-      hilCgLabelCanvas.height = 64;
+      hilCgLabelCanvas.width = 128;
+      hilCgLabelCanvas.height = 128;
       const hilCgLabelCtx = hilCgLabelCanvas.getContext('2d');
       if (hilCgLabelCtx) {
-        hilCgLabelCtx.clearRect(0, 0, 64, 64);
+        hilCgLabelCtx.clearRect(0, 0, 128, 128);
         hilCgLabelCtx.fillStyle = 'rgba(250, 252, 255, 0.98)';
-        hilCgLabelCtx.font = 'bold 28px Avenir Next, Segoe UI, Arial, sans-serif';
+        hilCgLabelCtx.font = 'bold 54px Avenir Next, Segoe UI, Arial, sans-serif';
         hilCgLabelCtx.textAlign = 'center';
         hilCgLabelCtx.textBaseline = 'middle';
-        hilCgLabelCtx.fillText('CG', 32, 34);
+        hilCgLabelCtx.fillText('CG', 64, 68);
       }
       const hilCgLabelTex = new THREE.CanvasTexture(hilCgLabelCanvas);
       hilCgLabelTex.colorSpace = THREE.SRGBColorSpace;
       const hilCgLabel = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.024, 0.024),
+        new THREE.PlaneGeometry(0.040, 0.040),
         new THREE.MeshBasicMaterial({ map: hilCgLabelTex, transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide }),
       );
       hilCgLabel.rotation.x = -Math.PI / 2;
-      hilCgLabel.position.set(0, 0.0046, 0);
+      hilCgLabel.position.set(0, 0.0047, 0);
       hilCgLabel.renderOrder = 160;
       hilOverlayGroup.add(hilCgLabel);
       const hilStancePoints = new THREE.Points(
@@ -2170,6 +2177,13 @@ Revision History:
         z: Number(dogRoot.position.z || 0),
       });
       scene.add(dogRoot);
+      const hilBodyComMarker = new THREE.Mesh(
+        new THREE.SphereGeometry(0.020, 18, 16),
+        new THREE.MeshBasicMaterial({ color: 0xff6969, transparent: true, opacity: 0.96 }),
+      );
+      hilBodyComMarker.position.set(0, 0.50, 0);
+      hilBodyComMarker.renderOrder = 165;
+      scene.add(hilBodyComMarker);
       window.__robotDogDebug = {
         getMode: () => String(poseControl.mode || ''),
         getServoCommandDeg: () => ({ ...(dogRoot?.userData?.servoCommandDeg || {}) }),
@@ -2489,7 +2503,7 @@ Revision History:
       const _stancePts = [];
       const _supportPts3 = [];
       const _allFootY = [];
-      function updateHilOverlayScene(supportPoly, stancePts, comProj, unstable) {
+      function updateHilOverlayScene(supportPoly, stancePts, comProj, comBodyY, unstable) {
         _supportPts3.length = 0;
         if (Array.isArray(supportPoly) && supportPoly.length >= 3) {
           supportPoly.forEach((p) => _supportPts3.push(new THREE.Vector3(p.x, 0.003, p.z)));
@@ -2503,7 +2517,13 @@ Revision History:
           : [new THREE.Vector3(0, 0.004, 0)];
         hilStancePoints.geometry.setFromPoints(stancePts3);
         hilComMarker.position.set(Number(comProj?.x || 0), 0.004, Number(comProj?.z || 0));
-        hilCgLabel.position.set(Number(comProj?.x || 0), 0.0046, Number(comProj?.z || 0));
+        hilCgLabel.position.set(Number(comProj?.x || 0), 0.0047, Number(comProj?.z || 0));
+        const topY = Number.isFinite(Number(comBodyY)) ? Number(comBodyY) : 0.30;
+        hilComDropLine.geometry.setFromPoints([
+          new THREE.Vector3(Number(comProj?.x || 0), topY, Number(comProj?.z || 0)),
+          new THREE.Vector3(Number(comProj?.x || 0), 0.004, Number(comProj?.z || 0)),
+        ]);
+        hilComDropLine.computeLineDistances();
       }
 
       function pushReplayFrame(frame) {
@@ -2801,6 +2821,11 @@ Revision History:
           hilGateState.penetrationViolations += 1;
           hilGateState.contactFlags.push(`ground_penetration:${minFootY.toFixed(4)}`);
         }
+        hilBodyComMarker.position.set(
+          Number(dogRoot.position.x || 0),
+          Number((dogRoot.position.y || 0) + 0.50),
+          Number(dogRoot.position.z || 0),
+        );
 
         const supportPoly = convexHullXZ(_stancePts);
         const comProj = { x: Number(dogRoot.position.x), z: Number(dogRoot.position.z) };
@@ -2864,7 +2889,7 @@ Revision History:
         } else {
           hilGateState.passCount += 1;
         }
-        updateHilOverlayScene(supportPoly, _stancePts, comProj, unstable);
+        updateHilOverlayScene(supportPoly, _stancePts, comProj, Number(hilBodyComMarker.position.y || 0), unstable);
 
         if (imuTelemetryState.online && isWalkMode) {
           const expectedRoll = hilGateState.imuRollEnvelopeDeg * Math.sin(gaitT);
