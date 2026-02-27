@@ -1,6 +1,6 @@
 <!--
 File: Test/DigitalTwin/README_DigitalTwin.md
-Version: v1.61 (2026-02-26 21:48)
+Version: v1.62 (2026-02-27 08:32)
 Revision History: moved to the end of this file.
 -->
 
@@ -56,6 +56,28 @@ open -a Safari 'http://127.0.0.1:8766/Test/DigitalTwin/pages/freenove_robotdog_3
 4. Basic troubleshooting:
 - If Playwright fails on HIL margin, confirm dog is in `Walk` mode and not in replay state.
 - If penetration violations appear, refresh page and rerun with default camera/controls.
+
+## Live Page Sync Check (Prevent Mismatch)
+For a new user, run this before comparing what you see versus verification reports:
+
+1. Run the sync verifier (refreshes focused Safari page and checks runtime):
+```bash
+python3 /Users/mengtatsai/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Test/DigitalTwin/scripts/verify_live_page_sync.py --refresh-focused-safari --headless
+```
+2. Expected result:
+- JSON includes `"ok": true`
+- `"checks.no_conflict_markers": true`
+- `"checks.matches_origin_main": true`
+- `"runtime.state.hasWebGLCanvas": true`
+- `"runtime.state.hasOverlayPanel": true`
+3. Output artifact path:
+```text
+/Users/mengtatsai/Freenove_Robot_Dog_Kit_for_Raspberry_Pi/Code/Test/DigitalTwin/logs/live_page_state.json
+```
+4. Basic troubleshooting:
+- If conflict markers are reported, resolve file conflicts in the page first.
+- If page mismatch is reported, sync local page to `origin/main` and rerun.
+- If runtime checks fail, confirm network access for Three.js CDN and rerun.
 
 ## Goal
 Create a local **Digital Twin** for the Pi Server Robot Dog at a **professional-grade engineering standard** comparable to MuJoCo and ROS 2 simulation workflows, so it can:
@@ -983,6 +1005,7 @@ Rule of thumb:
 - Add one summary exporter that compiles all phase logs into a single report file.
 
 ## Revision History
+- 2026-02-27 08:32 v1.62 - Added beginner-safe `Live Page Sync Check` workflow and linked automated verifier script/output to prevent user-view vs agent-verification mismatch.
 - 2026-02-26 19:07 v1.59 - Fixed UI overlap in render page by switching left-side panels to dynamic stack layout (HUD -> mode controls -> Servo Test), plus viewport-safe servo-dock height handling.
 - 2026-02-26 19:01 v1.58 - Added top-level new-user `Quick Start (Launch Page First)` section with explicit host/verify/open steps and basic troubleshooting.
 - 2026-02-26 13:40 v1.57 - Added `Apply IMU` checkbox with default OFF so IMU telemetry can be monitored without rotating the model; this aligns operator expectation that pitch=0 should appear level unless IMU application is enabled.
