@@ -8,8 +8,9 @@ Usage:
   1) Open this HTML in a modern browser with internet access (Three.js CDN import map).
   2) Use mouse drag/wheel to orbit/zoom/pan the 3D model.
   3) Use Walk/RELAX/S11 controls and the Servo Test panel to verify channel motion behavior.
-Version: v1.96 (2026-02-27 08:21)
+Version: v1.97 (2026-02-27 08:23)
 Revision History:
+- 2026-02-27 08:23 v1.97 - Labeled the HIL COM ground marker with `CG` text centered in the red circle for clearer identification.
 - 2026-02-27 08:21 v1.96 - Improved gait-debug overlay layout to prevent text/ghost overlap and added live `Step deg/tick` speed dial control (default slower for visibility) with real-time gait update.
 - 2026-02-27 08:17 v1.95 - Added dedicated `Ghost Leg` UI button (default ON) for gait-debug overlay; button toggles ghost-leg rendering independently without changing gait logic.
 - 2026-02-27 07:37 v1.94 - Added GAIT-DEBUG OVERLAY mode: bottom 2D canvas showing raw firmware gait math traces (`X1/Y1`, `X2/Y2`), clamp line, live theta/step/stance status, current-point markers, and semi-transparent ghost-leg sketch; toggle with `G` key.
@@ -552,7 +553,7 @@ Revision History:
       </div>
       <div id="buildBadge">
         <div><span class="k">File:</span> Test/DigitalTwin/pages/freenove_robotdog_3d_render.html</div>
-        <div><span class="k">Build:</span> v1.96 | 2026-02-27 08:21 CST</div>
+        <div><span class="k">Build:</span> v1.97 | 2026-02-27 08:23 CST</div>
       </div>
       <div id="hud">
         <div>ClientAI Jack Russell model on Freenove page. Drag=orbit, wheel=zoom, right-drag=pan.</div>
@@ -2131,6 +2132,28 @@ Revision History:
       hilComMarker.rotation.x = -Math.PI / 2;
       hilComMarker.position.set(0, 0.004, 0);
       hilOverlayGroup.add(hilComMarker);
+      const hilCgLabelCanvas = document.createElement('canvas');
+      hilCgLabelCanvas.width = 64;
+      hilCgLabelCanvas.height = 64;
+      const hilCgLabelCtx = hilCgLabelCanvas.getContext('2d');
+      if (hilCgLabelCtx) {
+        hilCgLabelCtx.clearRect(0, 0, 64, 64);
+        hilCgLabelCtx.fillStyle = 'rgba(250, 252, 255, 0.98)';
+        hilCgLabelCtx.font = 'bold 28px Avenir Next, Segoe UI, Arial, sans-serif';
+        hilCgLabelCtx.textAlign = 'center';
+        hilCgLabelCtx.textBaseline = 'middle';
+        hilCgLabelCtx.fillText('CG', 32, 34);
+      }
+      const hilCgLabelTex = new THREE.CanvasTexture(hilCgLabelCanvas);
+      hilCgLabelTex.colorSpace = THREE.SRGBColorSpace;
+      const hilCgLabel = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.024, 0.024),
+        new THREE.MeshBasicMaterial({ map: hilCgLabelTex, transparent: true, depthTest: false, depthWrite: false, side: THREE.DoubleSide }),
+      );
+      hilCgLabel.rotation.x = -Math.PI / 2;
+      hilCgLabel.position.set(0, 0.0046, 0);
+      hilCgLabel.renderOrder = 160;
+      hilOverlayGroup.add(hilCgLabel);
       const hilStancePoints = new THREE.Points(
         new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(0, 0.004, 0)]),
         new THREE.PointsMaterial({ color: 0x8ad6ff, size: 0.04, sizeAttenuation: true }),
@@ -2480,6 +2503,7 @@ Revision History:
           : [new THREE.Vector3(0, 0.004, 0)];
         hilStancePoints.geometry.setFromPoints(stancePts3);
         hilComMarker.position.set(Number(comProj?.x || 0), 0.004, Number(comProj?.z || 0));
+        hilCgLabel.position.set(Number(comProj?.x || 0), 0.0046, Number(comProj?.z || 0));
       }
 
       function pushReplayFrame(frame) {
