@@ -8,8 +8,9 @@ Usage:
   1) Open this HTML in a modern browser with internet access (Three.js CDN import map).
   2) Use mouse drag/wheel to orbit/zoom/pan the 3D model.
   3) Use Walk/RELAX/S11 controls and the Servo Test panel to verify channel motion behavior.
-Version: v1.94 (2026-02-27 07:37)
+Version: v1.95 (2026-02-27 08:17)
 Revision History:
+- 2026-02-27 08:17 v1.95 - Added dedicated `Ghost Leg` UI button (default ON) for gait-debug overlay; button toggles ghost-leg rendering independently without changing gait logic.
 - 2026-02-27 07:37 v1.94 - Added GAIT-DEBUG OVERLAY mode: bottom 2D canvas showing raw firmware gait math traces (`X1/Y1`, `X2/Y2`), clamp line, live theta/step/stance status, current-point markers, and semi-transparent ghost-leg sketch; toggle with `G` key.
 - 2026-02-27 07:21 v1.93 - Entered firmware-mirror mode for walk gait: replaced independent phase/duty gait model with Pi `Control.py forWard()` math and leg index mapping (0/2 vs 1/3), fixed X/Y amplitudes (`12/6`), removed lateral gait compensation from walk path, and added mirror-state debug export.
 - 2026-02-27 06:59 v1.92 - Added gait-tuning debug controls for deterministic sweep validation (`stride/forward-speed/duty-factor`), exported anti-phase violation metrics in HIL report, and wired sweep-friendly stability telemetry hooks.
@@ -485,6 +486,29 @@ Revision History:
         box-shadow: 0 8px 28px rgba(0, 0, 0, 0.30);
         overflow: hidden;
       }
+      #gaitDebugToolbar {
+        position: absolute;
+        top: 8px;
+        right: 8px;
+        z-index: 17;
+        display: flex;
+        gap: 6px;
+      }
+      #ghostLegBtn {
+        border: 1px solid rgba(98, 144, 196, 0.75);
+        background: rgba(12, 24, 41, 0.90);
+        color: #d9ecff;
+        border-radius: 9px;
+        padding: 5px 10px;
+        font-size: 12px;
+        font-weight: 700;
+        cursor: pointer;
+      }
+      #ghostLegBtn.on {
+        border-color: rgba(89, 216, 255, 0.95);
+        color: #ecfbff;
+        box-shadow: 0 0 0 1px rgba(70, 176, 255, 0.35) inset;
+      }
       #gaitDebugPanel.hidden {
         display: none;
       }
@@ -604,6 +628,9 @@ Revision History:
         <div id="dogActionStatus">Action: stop | Beep: off | LED: off</div>
       </div>
       <div id="gaitDebugPanel">
+        <div id="gaitDebugToolbar">
+          <button id="ghostLegBtn" class="on" type="button">Ghost Leg: ON</button>
+        </div>
         <canvas id="gaitDebugCanvas" width="760" height="216"></canvas>
       </div>
     </div>
@@ -1499,12 +1526,19 @@ Revision History:
       const dogActionStatusEl = document.getElementById('dogActionStatus');
       const gaitDebugPanelEl = document.getElementById('gaitDebugPanel');
       const gaitDebugCanvasEl = document.getElementById('gaitDebugCanvas');
+      const ghostLegBtnEl = document.getElementById('ghostLegBtn');
       const gaitDebugCtx = gaitDebugCanvasEl?.getContext('2d') || null;
       const gaitDebugState = {
         visible: true,
+        ghostLegOn: true,
         width: 760,
         height: 216,
       };
+      function syncGhostLegBtnUi() {
+        if (!ghostLegBtnEl) return;
+        ghostLegBtnEl.classList.toggle('on', !!gaitDebugState.ghostLegOn);
+        ghostLegBtnEl.textContent = `Ghost Leg: ${gaitDebugState.ghostLegOn ? 'ON' : 'OFF'}`;
+      }
       function layoutLeftStack() {
         if (!hudEl || !controlsEl || !servoTestDockEl) return;
         const gutter = 10;
@@ -1647,27 +1681,29 @@ Revision History:
         ctx.fillText(`X2,Y2(raw->clamp)=(${math.x2.toFixed(2)}, ${math.y2Raw.toFixed(2)} -> ${math.y2Clamped.toFixed(2)})`, infoX, 126);
         ctx.fillText(`Toggle: press 'G'`, infoX, 146);
 
-        // Optional ghost-leg rendering in panel space, using raw body-frame math only.
-        const ghostBaseX = infoX + 34;
-        const ghostBaseY = h - 60;
-        const scaleX = 5.6;
-        const scaleY = 9.0;
-        drawRawGhostLeg(
-          ctx,
-          ghostBaseX,
-          ghostBaseY - 36,
-          ghostBaseX + (math.x1 * scaleX * 0.35),
-          ghostBaseY + ((math.y1Raw - math.height) * scaleY),
-          'rgba(85, 216, 255, 0.52)',
-        );
-        drawRawGhostLeg(
-          ctx,
-          ghostBaseX + 94,
-          ghostBaseY - 36,
-          ghostBaseX + 94 + (math.x2 * scaleX * 0.35),
-          ghostBaseY + ((math.y2Raw - math.height) * scaleY),
-          'rgba(255, 164, 90, 0.50)',
-        );
+        if (gaitDebugState.ghostLegOn) {
+          // Optional ghost-leg rendering in panel space, using raw body-frame math only.
+          const ghostBaseX = infoX + 34;
+          const ghostBaseY = h - 60;
+          const scaleX = 5.6;
+          const scaleY = 9.0;
+          drawRawGhostLeg(
+            ctx,
+            ghostBaseX,
+            ghostBaseY - 36,
+            ghostBaseX + (math.x1 * scaleX * 0.35),
+            ghostBaseY + ((math.y1Raw - math.height) * scaleY),
+            'rgba(85, 216, 255, 0.52)',
+          );
+          drawRawGhostLeg(
+            ctx,
+            ghostBaseX + 94,
+            ghostBaseY - 36,
+            ghostBaseX + 94 + (math.x2 * scaleX * 0.35),
+            ghostBaseY + ((math.y2Raw - math.height) * scaleY),
+            'rgba(255, 164, 90, 0.50)',
+          );
+        }
       }
       if (cadGeomInfoEl) {
         cadGeomInfoEl.innerHTML = `<span class="k">Geom Bind:</span> body=${CAD_MEASURED_MM.bodyLength}/${CAD_MEASURED_MM.bodyWidth}/${CAD_MEASURED_MM.bodyHeight}mm, L1/L2=${CAD_MEASURED_MM.upperLegLength}/${CAD_MEASURED_MM.lowerLegLength}mm, hip=${CAD_MEASURED_MM.hipOffsetX}/${CAD_MEASURED_MM.hipOffsetY}mm`;
@@ -1874,11 +1910,16 @@ Revision History:
         }
         startDogDemo(nowSec);
       });
+      ghostLegBtnEl?.addEventListener('click', () => {
+        gaitDebugState.ghostLegOn = !gaitDebugState.ghostLegOn;
+        syncGhostLegBtnUi();
+      });
       window.addEventListener('keydown', (ev) => {
         const tag = String(ev?.target?.tagName || '').toUpperCase();
         if (tag === 'INPUT' || tag === 'TEXTAREA' || ev?.target?.isContentEditable) return;
         if (String(ev.key || '').toLowerCase() === 'g') gaitDebugState.visible = !gaitDebugState.visible;
       });
+      syncGhostLegBtnUi();
 
       function setServoTestStatusText(msg, isErr = false) {
         if (!servoTestStatusEl) return;
