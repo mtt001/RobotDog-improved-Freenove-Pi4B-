@@ -1,0 +1,127 @@
+{
+  "robot": "Freenove Robot Dog",
+  "servo_model": "Emax ES08MA II",
+  "units": {
+    "length": "mm",
+    "angle": "deg"
+  },
+  "notes": "Initial baseline values are ASSUMED for simulation bootstrap. Replace with measured values during calibration and keep FR/FL/RR/RL channel mapping aligned with runtime scripts.",
+  "value_status": "MIXED_MEASURED_AND_ASSUMED",
+  "confidence_scale": "0-100",
+  "dimensions": {
+    "body_length": 180,
+    "body_width": 110,
+    "body_height": 85,
+    "upper_leg_length": 55,
+    "lower_leg_length": 55,
+    "hip_offset_x": 70,
+    "hip_offset_y": 37.5,
+    "hip_offset_z": 0
+  },
+  "dimensions_source": {
+    "upper_leg_length": "MEASURED_USER",
+    "lower_leg_length": "ASSUMED_FROM_DRAWING_WITH_L1_SCALE",
+    "hip_offset_x": "DERIVED_FROM_USER_MEASURED_FR_RR_PIVOT_SPAN_140MM",
+    "hip_offset_y": "DERIVED_FROM_USER_MEASURED_FR_FL_PIVOT_SPAN_75MM",
+    "hip_offset_z": "ASSUMED"
+  },
+  "dimensions_confidence": {
+    "upper_leg_length": 85,
+    "lower_leg_length": 70,
+    "hip_offset_x": 75,
+    "hip_offset_y": 75,
+    "hip_offset_z": 40
+  },
+  "servo_limits": {
+    "default_min_deg": 0,
+    "default_max_deg": 180,
+    "neutral_deg": 90,
+    "safe_operating_min_deg": 0,
+    "safe_operating_max_deg": 180,
+    "assembly_install_window_deg": [
+      65,
+      115
+    ]
+  },
+  "servo_dynamics_assumed": {
+    "max_velocity_deg_per_sec": 2.28,
+    "command_to_motion_latency_ms": 554.67,
+    "update_rate_hz": 50,
+    "i2c_baudrate": 400000
+  },
+  "servo_limits_measured": {
+    "S11": {
+      "min_safe_deg": 65,
+      "max_safe_deg": 180,
+      "source": "user_measured_2026-02-26"
+    },
+    "S12": {
+      "min_safe_deg": 0,
+      "max_safe_deg": 180,
+      "source": "user_measured_2026-02-26"
+    },
+    "S13": {
+      "min_safe_deg": 0,
+      "max_safe_deg": 180,
+      "source": "user_measured_2026-02-26"
+    }
+  },
+  "servo_limits_estimated": {},
+  "neutral_offsets_assumed": {
+    "S11_offset_from_90_deg": 0.0,
+    "S12_offset_from_90_deg": 0.0,
+    "S13_offset_from_90_deg": 0.0,
+    "source": "user_assumed_2026-02-26",
+    "confidence": 65,
+    "notes": "neutral offsets from measured assembly alignment"
+  },
+  "imu_mount_assumed": {
+    "frame": "FLU",
+    "roll_offset_deg": 0.0,
+    "pitch_offset_deg": 0.0,
+    "yaw_offset_deg": 0.0
+  },
+  "imu_assumption_confidence": {
+    "mount_orientation_confidence": 45,
+    "static_bias_confidence": 45,
+    "notes": "IMU mount+bias from flat table calibration session"
+  },
+  "thermal_protection_hint": {
+    "move_duration_limit_min": 3,
+    "relax_duration_min": 1
+  },
+  "channels": {
+    "head_yaw": 15,
+    "FR": [
+      11,
+      12,
+      13
+    ],
+    "FL": [
+      4,
+      3,
+      2
+    ],
+    "RR": [
+      8,
+      9,
+      10
+    ],
+    "RL": [
+      7,
+      6,
+      5
+    ]
+  },
+  "provenance": {
+    "source": "Freenove tutorial deep-read + engineering assumption + interactive user measurement",
+    "last_updated": "2026-02-26 11:11 CST",
+    "requires_user_measurement_feedback": true
+  },
+  "servo_backlash_estimated": {
+    "S11_deg": 11.53,
+    "S12_deg": 36.79,
+    "S13_deg": 5.12,
+    "source": "SIMULATED_DIGITAL_TWIN"
+  }
+}
