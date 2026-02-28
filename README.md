@@ -1,7 +1,7 @@
 # Freenove Robot Dog - Code Overview
 
 ## Version
-v1.0.1 (2026-02-28 23:35 CST)
+v1.0.2 (2026-02-28 23:58 CST)
 
 This folder contains all operational code for the Freenove Robot Dog.
 
@@ -12,6 +12,12 @@ This folder contains all operational code for the Freenove Robot Dog.
 
 ## Governance Reference
 - Premium scoring table: [`Documents/Copilot Premium Request scoring table.md`](Documents/Copilot%20Premium%20Request%20scoring%20table.md)
+
+## AI Heartbeat Status (iPhone)
+- Live status file: [`iCloud/AI_Reports/latest_status.md`](iCloud/AI_Reports/latest_status.md)
+- Start heartbeat (10 min): `tools/start_ai_heartbeat.sh "Servo Gait View long-run support" 600`
+- Stop heartbeat: `tools/stop_ai_heartbeat.sh`
+- Worker script: `tools/ai_status_heartbeat.sh`
 
 ## Quick Start
 1. On Pi:
@@ -52,5 +58,6 @@ How both models are used right now:
 - `Client(Original)/` (if present in your full repo) keeps original Freenove baseline references.
 
 ## Revision History
+- 2026-02-28 23:58 v1.0.2  Added AI heartbeat status note and start/stop commands for iPhone progress monitoring.
 - 2026-02-28 23:35 v1.0.1  Added governance quick link to the premium scoring reference table in `Documents/`.
 - 2026-02-11 17:32 v1.0.0  Rewrote top-level README and added dual-model YOLO Vision method documentation for current `mtDogMain.py` runtime.
