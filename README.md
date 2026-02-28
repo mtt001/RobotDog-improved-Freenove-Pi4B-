@@ -1,7 +1,7 @@
 # Freenove Robot Dog - Code Overview
 
 ## Version
-v1.0.0 (2026-02-11 17:32 local time)
+v1.0.1 (2026-02-28 23:35 CST)
 
 This folder contains all operational code for the Freenove Robot Dog.
 
@@ -9,6 +9,9 @@ This folder contains all operational code for the Freenove Robot Dog.
 |-----------|----------|-------------|
 | [`Client/`](Client/) | macOS / Desktop | PyQt GUI for control, video, and YOLO vision runtime. |
 | [`Server/`](Server/) | Raspberry Pi | Camera streaming, servo control, telemetry, and web runtime services. |
+
+## Governance Reference
+- Premium scoring table: [`Documents/Copilot Premium Request scoring table.md`](Documents/Copilot%20Premium%20Request%20scoring%20table.md)
 
 ## Quick Start
 1. On Pi:
@@ -49,4 +52,5 @@ How both models are used right now:
 - `Client(Original)/` (if present in your full repo) keeps original Freenove baseline references.
 
 ## Revision History
+- 2026-02-28 23:35 v1.0.1  Added governance quick link to the premium scoring reference table in `Documents/`.
 - 2026-02-11 17:32 v1.0.0  Rewrote top-level README and added dual-model YOLO Vision method documentation for current `mtDogMain.py` runtime.

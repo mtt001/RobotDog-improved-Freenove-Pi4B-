@@ -1,7 +1,7 @@
 # AGENTS.md
 
 ## Version
-v2.2 (2026-02-28 23:47 CST)
+v2.3 (2026-02-28 23:47 CST)
 
 ---
 
@@ -128,6 +128,10 @@ Then:
 ---
 
 # 7. PREMIUM ESTIMATION ENGINE
+
+Reference table:
+
+- [Copilot Premium Request scoring table](Copilot Premium Request scoring table.md)
 
 Maintain internal estimate counters.
 

@@ -8,8 +8,19 @@ Usage:
   1) Open this HTML in a modern browser with internet access (Three.js CDN import map).
   2) Use mouse drag/wheel to orbit/zoom/pan the 3D model.
   3) Use Walk/RELAX/S11 controls and the Servo Test panel to verify channel motion behavior.
-Version: v2.46 (2026-02-28 12:33)
+Version: v2.57 (2026-02-28 23:18)
 Revision History:
+- 2026-02-28 23:18 v2.57 - Removed `ZX Debug: ON` button, moved Step slider toolbar above ellipse area, and moved Servo Gait title block (title + next two lines) upward to top alignment in the panel.
+- 2026-02-28 23:12 v2.56 - Updated GAIT debug header texts per UX request: chart header now `Raw firmware math`, and main title now `Servo Gait View (look along dog +Y from right side)`.
+- 2026-02-28 22:34 v2.55 - Fixed GAIT runtime regression by restoring local `clampPlotY(...)` helper in ZX panel draw path (prevents render-loop exception and restores 3D model/leg visualization).
+- 2026-02-28 22:28 v2.54 - Removed GAIT leg normalization/re-anchoring (`normalizeRightAngleLeg`, fixed slot pinning, outward knee/foot bias) so FR/FL/RR/RL render from direct live dog-frame `X-Z` projection of 3D joints.
+- 2026-02-28 22:08 v2.53 - Pinned `RL`/`RR` leg-and-label X position to `560`, removed bottom pair legend line, moved/renamed footer text to `Dog fram orthographic`, and shifted `X/Z` axis-letter marks down by one character height.
+- 2026-02-28 21:55 v2.52 - Switched GAIT panel to coordinate-debug labeling by showing `RL/FL/RR/FR (x,y)` text at each leg label position, removed static corner legend text (`TL/TR/BL/BR`), and updated GAIT title text to include `960x304`.
+- 2026-02-28 21:41 v2.51 - Fixed bottom-row label alignment in GAIT XZ panel by using the same vertical label offset for `RR` and `FR`.
+- 2026-02-28 21:38 v2.50 - Added static corner legend labels in the 4-leg GAIT XZ panel (`TL=RL`, `TR=FL`, `BL=RR`, `BR=FR`) for immediate layout orientation.
+- 2026-02-28 21:31 v2.49 - Moved only the `FR` compact leg label upward by one character-height offset to avoid overlap with the leg glyph in the 4-leg GAIT panel.
+- 2026-02-28 21:25 v2.48 - Performed UI-overlap cleanup for 4-leg GAIT panel by removing persistent compact joint text overlays (`HAA/HFE/KFE`) and retaining hover tooltip targets only.
+- 2026-02-28 21:04 v2.47 - Fixed 4-leg GAIT debug overlap by widening FR/FL/RR/RL hip slot spacing and adding outward knee/foot bias so row pairs no longer stack toward panel center.
 - 2026-02-28 12:33 v2.46 - Relocated from `Code/Test/DigitalTwin/` to `Code/DigitalTwin/`; updated file header path.
 - 2026-02-28 11:59 v2.45 - Clarified joint-role visualization in GAIT debug: explicit axis labels for `HAA`/`HFE`/`KFE` (HAA on white shaft, HFE on hip axis, KFE on knee axis) with tooltip targets on joint axes.
 - 2026-02-28 11:52 v2.44 - Added HAA assembly structure to GAIT debug leg glyphs and highlighted the top-right rotating shaft with white styling (plus tooltip target support).
@@ -556,28 +567,13 @@ Revision History:
       }
       #gaitDebugToolbar {
         position: absolute;
-        top: 6px;
-        right: 8px;
+        top: 8px;
+        left: 12px;
         z-index: 17;
         display: flex;
         gap: 6px;
         align-items: center;
         pointer-events: auto;
-      }
-      #zxDebugViewBtn {
-        border: 1px solid rgba(98, 144, 196, 0.75);
-        background: rgba(12, 24, 41, 0.90);
-        color: #d9ecff;
-        border-radius: 9px;
-        padding: 5px 10px;
-        font-size: 12px;
-        font-weight: 700;
-        cursor: pointer;
-      }
-      #zxDebugViewBtn.on {
-        border-color: rgba(89, 216, 255, 0.95);
-        color: #ecfbff;
-        box-shadow: 0 0 0 1px rgba(70, 176, 255, 0.35) inset;
       }
       #gaitStepDialWrap {
         display: inline-flex;
@@ -622,7 +618,7 @@ Revision History:
       </div>
       <div id="buildBadge">
         <div><span class="k">File:</span> DigitalTwin/pages/freenove_robotdog_3d_render.html</div>
-        <div><span class="k">Build:</span> v2.45 | 2026-02-28 11:59 CST</div>
+        <div><span class="k">Build:</span> v2.57 | 2026-02-28 23:18 CST</div>
       </div>
       <div id="hud">
         <div id="hudTitle">Freenove Robot Dog Digital Twin (Firmware Mirror)</div>
@@ -727,7 +723,6 @@ Revision History:
             <input id="gaitStepDial" type="range" min="1" max="12" step="0.5" value="1" />
             <span id="gaitStepDialValue">1.0</span>
           </label>
-          <button id="zxDebugViewBtn" class="on" type="button">ZX Debug: ON</button>
         </div>
         <canvas id="gaitDebugCanvas" width="760" height="216"></canvas>
       </div>
@@ -1663,11 +1658,9 @@ Revision History:
       const gaitDebugCanvasEl = document.getElementById('gaitDebugCanvas');
       const gaitStepDialEl = document.getElementById('gaitStepDial');
       const gaitStepDialValueEl = document.getElementById('gaitStepDialValue');
-      const zxDebugViewBtnEl = document.getElementById('zxDebugViewBtn');
       const gaitDebugCtx = gaitDebugCanvasEl?.getContext('2d') || null;
       const gaitDebugState = {
         visible: true,
-        zxDebugOn: true,
         width: 760,
         height: 216,
         mouseX: 0,
@@ -1704,11 +1697,6 @@ Revision History:
         const speed = Number(piMirrorState.speedDeg || 0);
         if (gaitStepDialEl) gaitStepDialEl.value = String(speed);
         if (gaitStepDialValueEl) gaitStepDialValueEl.textContent = speed.toFixed(1);
-      }
-      function syncZxDebugBtnUi() {
-        if (!zxDebugViewBtnEl) return;
-        zxDebugViewBtnEl.classList.toggle('on', !!gaitDebugState.zxDebugOn);
-        zxDebugViewBtnEl.textContent = `ZX Debug: ${gaitDebugState.zxDebugOn ? 'ON' : 'OFF'}`;
       }
       function layoutLeftStack() {
         if (!hudEl || !controlsEl || !servoTestDockEl) return;
@@ -1911,15 +1899,6 @@ Revision History:
           ctx.stroke();
           ctx.restore();
           const shaftW = toWorld(22.9, 8.3);
-          const haaLabel = toWorld(9.6, 11.4);
-          ctx.fillStyle = 'rgba(233, 240, 250, 0.96)';
-          ctx.font = 'bold 7px Avenir Next, Segoe UI, sans-serif';
-          ctx.textAlign = 'left';
-          ctx.textBaseline = 'middle';
-          ctx.strokeStyle = 'rgba(9, 22, 38, 0.92)';
-          ctx.lineWidth = 2.0;
-          ctx.strokeText('HAA', haaLabel.x, haaLabel.y);
-          ctx.fillText('HAA', haaLabel.x, haaLabel.y);
           if (tooltipTargets) {
             tooltipTargets.push({
               x: shaftW.x,
@@ -1998,13 +1977,9 @@ Revision History:
           const lx = jointX + axisDx;
           const ly = jointY + axisDy;
           ctx.fillStyle = labelColor;
-          ctx.font = 'bold 7px Avenir Next, Segoe UI, sans-serif';
-          ctx.textAlign = 'left';
-          ctx.textBaseline = 'middle';
-          ctx.strokeStyle = 'rgba(8, 20, 36, 0.94)';
-          ctx.lineWidth = 2.0;
-          ctx.strokeText(text, lx, ly);
-          ctx.fillText(text, lx, ly);
+          ctx.beginPath();
+          ctx.arc(lx, ly, 1.6, 0, Math.PI * 2);
+          ctx.fill();
           if (tooltipTargets) {
             tooltipTargets.push({
               x: jointX,
@@ -2096,7 +2071,7 @@ Revision History:
         const clampY = mapY(math.height);
         ctx.fillStyle = '#9fc2ea';
         ctx.font = '11px Avenir Next, Segoe UI, sans-serif';
-        ctx.fillText('Toggle G to close/open Gait Debug', chart.x + 8, chart.y - 10);
+        ctx.fillText('Raw firmware math', chart.x + 8, chart.y - 10);
         ctx.strokeStyle = 'rgba(120, 145, 177, 0.52)';
         ctx.lineWidth = 1;
         ctx.strokeRect(chart.x, chart.y, chart.w, chart.h);
@@ -2149,13 +2124,13 @@ Revision History:
         const fmtFix1 = (n) => fmtFix(n, 5, 1);
         ctx.fillStyle = '#d9ebff';
         ctx.font = 'bold 12px Avenir Next, Segoe UI, sans-serif';
-        ctx.fillText('GAIT DEBUG (raw firmware math)', infoX, 34);
+        ctx.fillText('Servo Gait View (look along dog +Y from right side)', infoX, 18);
         ctx.font = '11px Menlo, Monaco, Consolas, monospace';
         const pairAStance = math.y1Clamped >= (math.height - 1e-6);
         const pairBStance = math.y2Clamped >= (math.height - 1e-6);
-        ctx.fillText(`Theta ${fmtFix1(piMirrorState.thetaDeg || 0)} deg | Step ${fmtFix1(piMirrorState.speedDeg || 0)} deg/tick | Pair [0+2]=${pairAStance ? 'YES' : 'NO'} [1+3]=${pairBStance ? 'YES' : 'NO'}`, infoX, 56);
+        ctx.fillText(`Theta ${fmtFix1(piMirrorState.thetaDeg || 0)} deg | Step ${fmtFix1(piMirrorState.speedDeg || 0)} deg/tick | Pair [0+2]=${pairAStance ? 'YES' : 'NO'} [1+3]=${pairBStance ? 'YES' : 'NO'}`, infoX, 36);
         ctx.fillStyle = '#9fc2ea';
-        ctx.fillText(`X1,Y1(${fmtFix(math.x1)},${fmtFix(math.y1Raw)} -> ${fmtFix(math.y1Clamped)})|X2,Y2(${fmtFix(math.x2)},${fmtFix(math.y2Raw)} -> ${fmtFix(math.y2Clamped)})`, infoX, 74);
+        ctx.fillText(`X1,Y1(${fmtFix(math.x1)},${fmtFix(math.y1Raw)} -> ${fmtFix(math.y1Clamped)})|X2,Y2(${fmtFix(math.x2)},${fmtFix(math.y2Raw)} -> ${fmtFix(math.y2Clamped)})`, infoX, 54);
         const workY = 82;
         const workH = h - workY - 10;
         const panelBox = { x: infoX, y: workY, w: Math.max(220, infoW), h: workH };
@@ -2222,11 +2197,8 @@ Revision History:
         );
         const mapLocalX = (lx) => padPx + ((lx - minLocalX) * pxPerLocal);
         const mapLocalZ = (lz) => padPx + ((maxLocalZ - lz) * pxPerLocal);
-        // Tutorial-like visual proportion: upper plate slightly longer than lower plate.
-        const upperSegLenPx = Math.max(16, Math.min(38, Math.floor(Math.min(zxRefW, zxRefH) * 0.18)));
-        const lowerSegLenPx = Math.max(14, Math.floor(upperSegLenPx * 0.88));
         const zxGeometry = localLegPoints.map((leg) => {
-          const legProjected = {
+          return {
             name: leg.name,
             hipX: mapLocalX(leg.hip.x),
             hipY: mapLocalZ(leg.hip.z),
@@ -2234,19 +2206,6 @@ Revision History:
             kneeY: mapLocalZ(leg.knee.z),
             footX: mapLocalX(leg.foot.x),
             footY: mapLocalZ(leg.foot.z),
-          };
-          return {
-            name: leg.name,
-            ...normalizeRightAngleLeg(
-              legProjected.hipX,
-              legProjected.hipY,
-              legProjected.kneeX,
-              legProjected.kneeY,
-              legProjected.footX,
-              legProjected.footY,
-              upperSegLenPx,
-              lowerSegLenPx,
-            ),
           };
         });
         const groundY = mapLocalZ(0);
@@ -2265,27 +2224,8 @@ Revision History:
           const plotTop = topStripH;
           const plotBottom = zxRefH - bottomStripH;
           const plotH = Math.max(40, plotBottom - plotTop);
-          const clampPlotX = (x) => THREE.MathUtils.clamp(x, plotX + 2, plotX + plotW - 2);
           const clampPlotY = (y) => THREE.MathUtils.clamp(y, plotTop + 2, plotBottom - 2);
-          // Enforce pair separation: left pair top (RL/FL), right pair bottom (RR/FR).
-          const hipSlots = {
-            RL: { x: Math.floor(plotX + (plotW * 0.30)), y: Math.floor(plotTop + (plotH * 0.30)) },
-            FL: { x: Math.floor(plotX + (plotW * 0.70)), y: Math.floor(plotTop + (plotH * 0.30)) },
-            RR: { x: Math.floor(plotX + (plotW * 0.30)), y: Math.floor(plotTop + (plotH * 0.74)) },
-            FR: { x: Math.floor(plotX + (plotW * 0.70)), y: Math.floor(plotTop + (plotH * 0.74)) },
-          };
-          const arrangedGeometry = zxGeometry.map((p) => {
-            const slot = hipSlots[p.name] || { x: p.hipX, y: p.hipY };
-            return {
-              ...p,
-              hipX: slot.x,
-              hipY: slot.y,
-              kneeX: clampPlotX(slot.x + (p.kneeX - p.hipX)),
-              kneeY: clampPlotY(slot.y + (p.kneeY - p.hipY)),
-              footX: clampPlotX(slot.x + (p.footX - p.hipX)),
-              footY: clampPlotY(slot.y + (p.footY - p.hipY)),
-            };
-          });
+          const arrangedGeometry = zxGeometry;
           const arrangedByName = Object.fromEntries(arrangedGeometry.map((g) => [g.name, g]));
           const hipMinX = Math.min(arrangedGeometry[0]?.hipX ?? 0, arrangedGeometry[1]?.hipX ?? 0, arrangedGeometry[2]?.hipX ?? 0, arrangedGeometry[3]?.hipX ?? 0);
           const hipMaxX = Math.max(arrangedGeometry[0]?.hipX ?? 0, arrangedGeometry[1]?.hipX ?? 0, arrangedGeometry[2]?.hipX ?? 0, arrangedGeometry[3]?.hipX ?? 0);
@@ -2333,8 +2273,8 @@ Revision History:
           ctx.stroke();
           ctx.fillStyle = '#cfe7ff';
           ctx.font = '9px Avenir Next, Segoe UI, sans-serif';
-          ctx.fillText('X', ox + axX + 31, oy + axY + 2);
-          ctx.fillText('Z', ox + axX - 2, oy + axY - 28);
+          ctx.fillText('X', ox + axX + 31, oy + axY + 12);
+          ctx.fillText('Z', ox + axX - 2, oy + axY - 18);
 
           ctx.save();
           ctx.beginPath();
@@ -2359,8 +2299,12 @@ Revision History:
             );
             ctx.restore();
             ctx.fillStyle = '#d8ebff';
-            ctx.font = 'bold 10px Avenir Next, Segoe UI, sans-serif';
-            ctx.fillText(p.name, ox + g.hipX - 8, oy + g.hipY - 10);
+            ctx.font = 'bold 9px Menlo, Monaco, Consolas, monospace';
+            const legLabelYOffset = 10;
+            const labelX = Math.round(ox + g.hipX - 8);
+            const labelY = Math.round(oy + g.hipY - legLabelYOffset);
+            const labelText = `${p.name} (${labelX}, ${labelY})`;
+            ctx.fillText(labelText, labelX, labelY);
           });
           ctx.restore();
 
@@ -2369,8 +2313,7 @@ Revision History:
           ctx.fillText('L1 upper > L2 lower', ox + zxRefW - 114, oy + 13);
           ctx.fillStyle = 'rgba(166, 198, 232, 0.9)';
           ctx.font = '10px Avenir Next, Segoe UI, sans-serif';
-          ctx.fillText('Dog-frame orthographic (X horizontal, Z vertical)', ox + 6, oy + zxRefH - 16);
-          ctx.fillText('Top: RL FL (left pair)   Bottom: RR FR (right pair)', ox + 6, oy + zxRefH - 5);
+          ctx.fillText('Dog fram orthographic', ox + 6, oy + zxRefH - 5);
           ctx.fillStyle = 'rgba(191, 225, 255, 0.92)';
           ctx.font = '9px Avenir Next, Segoe UI, sans-serif';
           ctx.fillText('Tooltip helper: hover HAA/HFE/KFE axis labels (HAA on white shaft)', ox + 108, oy + 13);
@@ -2639,10 +2582,6 @@ Revision History:
         }
         startDogDemo(nowSec);
       });
-      zxDebugViewBtnEl?.addEventListener('click', () => {
-        gaitDebugState.zxDebugOn = !gaitDebugState.zxDebugOn;
-        syncZxDebugBtnUi();
-      });
       gaitStepDialEl?.addEventListener('input', () => {
         const next = Number(gaitStepDialEl.value);
         piMirrorState.speedDeg = THREE.MathUtils.clamp(Number.isFinite(next) ? next : 4, 1, 12);
@@ -2660,7 +2599,6 @@ Revision History:
         if (key === '5') cameraManager.setMode('TOPDOWN');
       });
       syncGaitStepDialUi();
-      syncZxDebugBtnUi();
 
       function setServoTestStatusText(msg, isErr = false) {
         if (!servoTestStatusEl) return;
