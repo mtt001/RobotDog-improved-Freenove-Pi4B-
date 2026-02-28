@@ -1,0 +1,458 @@
+<!doctype html>
+<!--
+File: DigitalTwin/pages/tutorial_coordinate_systems.html
+Description:
+  Interactive 3D tutorial visualizing the three coordinate systems used in the
+  Digital Twin: Dog FLU frame, Three.js Scene frame, and the Pi Firmware IK
+  math frame. Shows how they map to each other and why the Gait Debug panel
+  should be labeled X-Z (dog frame) not X-Y.
+Usage:
+  1) Start local server from Code/ root:
+       python3 -m http.server 8877
+  2) Verify reachability:
+       curl -I http://127.0.0.1:8877/DigitalTwin/pages/tutorial_coordinate_systems.html
+     Expect: HTTP/1.0 200 OK
+  3) Open in Safari:
+       open -a Safari 'http://127.0.0.1:8877/DigitalTwin/pages/tutorial_coordinate_systems.html'
+  4) Orbit: mouse drag | Zoom: scroll | Buttons: toggle frames on/off
+Version: v1.1 (2026-02-28 12:07)
+Revision History:
+- 2026-02-28 12:07 v1.1 - Added copy-paste-ready launch/usage commands in header;
+  upgraded renderer pixel ratio from 1 to devicePixelRatio (Retina/HiDPI support)
+  for crisp 3D output.
+- 2026-02-28 11:44 v1.0 - Initial interactive 3D coordinate-system tutorial with
+  Dog FLU, Three.js Scene, Pi Firmware frames, projection plane demo, and mini
+  robot dog silhouette.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Tutorial: Digital Twin Coordinate Systems</title>
+<style>
+:root{--bg:#060c18;--panel:#0a1428;--border:rgba(78,131,191,0.45);}
+*{margin:0;padding:0;box-sizing:border-box;}
+html,body{width:100%;height:100%;overflow:hidden;font-family:'Avenir Next','Segoe UI',sans-serif;background:var(--bg);color:#d7e8ff;}
+#app{position:relative;width:100%;height:100%;}
+#info{position:absolute;top:12px;left:12px;z-index:10;max-width:520px;border-radius:10px;border:1px solid var(--border);background:rgba(8,13,24,0.88);padding:12px 14px;font-size:12px;line-height:1.45;pointer-events:auto;}
+#info h2{font-size:16px;color:#eef7ff;margin-bottom:6px;}
+#info h3{font-size:13px;color:#a8d2ff;margin:8px 0 3px;}
+#info .eq{font-family:Menlo,Monaco,monospace;color:#7bf2ff;font-size:11px;}
+#info .warn{color:#ffd98a;}
+#info .ok{color:#8fffbe;}
+#legend{position:absolute;bottom:12px;left:12px;z-index:10;border-radius:10px;border:1px solid var(--border);background:rgba(8,13,24,0.88);padding:10px 14px;font-size:11px;line-height:1.5;}
+.dot{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:4px;vertical-align:middle;}
+#controls{position:absolute;top:12px;right:12px;z-index:10;display:flex;flex-direction:column;gap:6px;}
+#controls button{padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:rgba(12,22,38,0.9);color:#d0e4ff;font-size:12px;cursor:pointer;}
+#controls button:hover{background:rgba(30,55,90,0.9);}
+#controls button.active{background:rgba(40,90,160,0.7);color:#fff;}
+</style>
+</head>
+<body>
+<div id="app">
+  <div id="info">
+    <h2>Tutorial: 3 Coordinate Systems in Digital Twin</h2>
+    <p>Orbit with mouse drag &middot; Zoom with scroll &middot; Use buttons to highlight each frame</p>
+    <h3>1. Dog FLU Frame <span style="color:#ff5a57">X</span><span style="color:#4fff8c">Y</span><span style="color:#48b8ff">Z</span> (body-fixed, labeled on model)</h3>
+    <p><span class="eq">+X = Forward, +Y = Left, +Z = Up</span> &mdash; right-handed (X&times;Y=Z)</p>
+    <h3>2. Three.js Scene Frame <span style="color:#ff9040">x</span><span style="color:#ffe040">y</span><span style="color:#40d0ff">z</span></h3>
+    <p><span class="eq">+x = Forward, +y = Up, +z = Right</span> &mdash; right-handed</p>
+    <h3>3. Key Mapping</h3>
+    <p class="eq ok">Dog X (Fwd) = Scene x (Fwd)<br/>
+    Dog Y (Left) = Scene &minus;z<br/>
+    Dog Z (Up) &nbsp;= Scene y (Up) &larr; <span class="warn">this is why panel label is wrong!</span></p>
+    <h3>4. Side-View Projection Plane</h3>
+    <p>Camera looks along dog +Y (from right side). Visible plane = <span class="ok">Dog X-Z</span> = <span class="warn">Scene x-y</span>.<br/>
+    Panel should label axes as <span class="ok">X horizontal, Z vertical</span> (dog frame), not "X, Y".</p>
+  </div>
+
+  <div id="legend">
+    <div><span class="dot" style="background:#ff5a57"></span><span class="dot" style="background:#4fff8c"></span><span class="dot" style="background:#48b8ff"></span> Dog FLU Frame (X/Y/Z)</div>
+    <div><span class="dot" style="background:#ff9040"></span><span class="dot" style="background:#ffe040"></span><span class="dot" style="background:#40d0ff"></span> Three.js Scene Frame (x/y/z)</div>
+    <div><span class="dot" style="background:rgba(100,255,180,0.5)"></span> Side-view projection plane (Dog X-Z = Scene x-y)</div>
+    <div><span class="dot" style="background:rgba(255,200,80,0.4)"></span> Pi Firmware IK plane (internal X/Y math)</div>
+  </div>
+
+  <div id="controls">
+    <button id="btnAll" class="active">Show All</button>
+    <button id="btnDog">Dog FLU Only</button>
+    <button id="btnScene">Scene Only</button>
+    <button id="btnProjection">Projection Plane</button>
+    <button id="btnFirmware">Firmware IK</button>
+    <button id="btnSideView">Side-View Camera</button>
+    <button id="btnReset">Reset Camera</button>
+  </div>
+</div>
+
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@0.161.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.161.0/examples/jsm/"}}
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+// ── Scene setup ───────────────────────────────────────────────
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x060c18);
+scene.fog = new THREE.Fog(0x060c18, 18, 40);
+
+const camera = new THREE.PerspectiveCamera(55, innerWidth/innerHeight, 0.05, 80);
+camera.position.set(0.8, 3.5, 7.5);
+
+const renderer = new THREE.WebGLRenderer({antialias:true});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.1;
+document.getElementById('app').appendChild(renderer.domElement);
+
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.target.set(0.25, 0.8, 0);
+
+scene.add(new THREE.HemisphereLight(0x9fc4ff, 0x0b1120, 0.9));
+const key = new THREE.DirectionalLight(0xf8fbff, 1.2);
+key.position.set(4, 6, 3);
+scene.add(key);
+
+// ── Grid ──────────────────────────────────────────────────────
+const grid = new THREE.GridHelper(8, 16, 0x26496a, 0x17283a);
+grid.material.opacity = 0.45;
+grid.material.transparent = true;
+scene.add(grid);
+
+// ── Helper: labeled arrow ─────────────────────────────────────
+function makeArrow(dir, origin, length, color, label, labelOffset) {
+  const group = new THREE.Group();
+  const arrow = new THREE.ArrowHelper(dir, origin, length, color, length*0.18, length*0.10);
+  arrow.line.material.depthTest = false;
+  arrow.cone.material.depthTest = false;
+  arrow.renderOrder = 200;
+  group.add(arrow);
+
+  // Text sprite
+  const canvas = document.createElement('canvas');
+  canvas.width = 512; canvas.height = 96;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'rgba(6,12,24,0.85)';
+  ctx.roundRect(4,4,504,88,14);
+  ctx.fill();
+  ctx.font = 'bold 44px Avenir Next, Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = '#'+color.toString(16).padStart(6,'0');
+  ctx.fillText(label, 256, 50);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({map:tex,transparent:true,depthTest:false}));
+  sprite.scale.set(0.72, 0.14, 1);
+  sprite.position.copy(origin).add(dir.clone().multiplyScalar(length)).add(labelOffset);
+  sprite.renderOrder = 201;
+  group.add(sprite);
+  return group;
+}
+
+// ── Helper: text billboard ────────────────────────────────────
+function makeTextSprite(text, position, color='#d0e8ff', size=0.28) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512; canvas.height = 128;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = 'rgba(8,16,30,0.82)';
+  ctx.roundRect(4,4,504,120,16);
+  ctx.fill();
+  ctx.strokeStyle = 'rgba(100,160,220,0.5)';
+  ctx.lineWidth = 2;
+  ctx.roundRect(4,4,504,120,16);
+  ctx.stroke();
+  ctx.font = 'bold 42px Avenir Next, Arial';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = color;
+  ctx.fillText(text, 256, 68);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({map:tex,transparent:true,depthTest:false}));
+  sprite.scale.set(size*4, size, 1);
+  sprite.position.copy(position);
+  sprite.renderOrder = 202;
+  return sprite;
+}
+
+// ── Groups ────────────────────────────────────────────────────
+const dogFrameGroup = new THREE.Group();
+const sceneFrameGroup = new THREE.Group();
+const projectionGroup = new THREE.Group();
+const firmwareGroup = new THREE.Group();
+const robotGroup = new THREE.Group();
+
+// ══════════════════════════════════════════════════════════════
+// 1. DOG FLU FRAME (at center, elevated to body height)
+// ══════════════════════════════════════════════════════════════
+const dogOrigin = new THREE.Vector3(0, 0.85, 0);
+const dogLen = 1.6;
+// Dog +X = Forward  = Scene +x = (1,0,0)
+dogFrameGroup.add(makeArrow(new THREE.Vector3(1,0,0), dogOrigin, dogLen, 0xff5a57, 'Dog +X (Fwd)', new THREE.Vector3(0.06,0.08,0)));
+// Dog +Y = Left     = Scene -z = (0,0,-1)
+dogFrameGroup.add(makeArrow(new THREE.Vector3(0,0,-1), dogOrigin, dogLen, 0x4fff8c, 'Dog +Y (Left)', new THREE.Vector3(0,0.08,-0.06)));
+// Dog +Z = Up       = Scene +y = (0,1,0)
+dogFrameGroup.add(makeArrow(new THREE.Vector3(0,1,0), dogOrigin, dogLen, 0x48b8ff, 'Dog +Z (Up)', new THREE.Vector3(0.06,0.10,0)));
+
+dogFrameGroup.add(makeTextSprite('Dog FLU Frame', new THREE.Vector3(0, 2.7, 0), '#a8d2ff', 0.28));
+scene.add(dogFrameGroup);
+
+// ══════════════════════════════════════════════════════════════
+// 2. THREE.JS SCENE FRAME (offset to left for clarity)
+// ══════════════════════════════════════════════════════════════
+const sceneOrigin = new THREE.Vector3(-3.0, 0.02, 0);
+const sceneLen = 1.3;
+// Scene +x = (1,0,0) same as Dog +X
+sceneFrameGroup.add(makeArrow(new THREE.Vector3(1,0,0), sceneOrigin, sceneLen, 0xff9040, 'Scene +x', new THREE.Vector3(0.04,0.06,0)));
+// Scene +y = (0,1,0) = Dog +Z
+sceneFrameGroup.add(makeArrow(new THREE.Vector3(0,1,0), sceneOrigin, sceneLen, 0xffe040, 'Scene +y', new THREE.Vector3(0.04,0.08,0)));
+// Scene +z = (0,0,1) = Dog -Y
+sceneFrameGroup.add(makeArrow(new THREE.Vector3(0,0,1), sceneOrigin, sceneLen, 0x40d0ff, 'Scene +z', new THREE.Vector3(0,0.06,0.04)));
+
+sceneFrameGroup.add(makeTextSprite('Three.js Scene Frame', new THREE.Vector3(-3.0, 1.6, 0), '#ffe0a0', 0.26));
+
+// Mapping lines connecting same physical directions
+const mappingMat = new THREE.LineDashedMaterial({color:0xffffff, transparent:true, opacity:0.25, dashSize:0.08, gapSize:0.06});
+function addMappingLine(a, b) {
+  const geom = new THREE.BufferGeometry().setFromPoints([a,b]);
+  const line = new THREE.Line(geom, mappingMat);
+  line.computeLineDistances();
+  line.renderOrder = 50;
+  sceneFrameGroup.add(line);
+}
+// Dog X tip -> Scene x tip
+addMappingLine(dogOrigin.clone().add(new THREE.Vector3(dogLen,0,0)), sceneOrigin.clone().add(new THREE.Vector3(sceneLen,0,0)));
+// Dog Z tip -> Scene y tip
+addMappingLine(dogOrigin.clone().add(new THREE.Vector3(0,dogLen,0)), sceneOrigin.clone().add(new THREE.Vector3(0,sceneLen,0)));
+// Dog Y tip -> Scene -z tip
+addMappingLine(dogOrigin.clone().add(new THREE.Vector3(0,0,-dogLen)), sceneOrigin.clone().add(new THREE.Vector3(0,0,sceneLen)));
+
+// Mapping labels
+sceneFrameGroup.add(makeTextSprite('Dog X = Scene x', new THREE.Vector3(-1.3, 0.85, 0.7), '#ff7a67', 0.20));
+sceneFrameGroup.add(makeTextSprite('Dog Z = Scene y ← BUG!', new THREE.Vector3(-1.3, 1.85, 0), '#ffe060', 0.20));
+sceneFrameGroup.add(makeTextSprite('Dog Y = Scene −z', new THREE.Vector3(-1.3, 0.85, -0.7), '#60ffa0', 0.20));
+
+scene.add(sceneFrameGroup);
+
+// ══════════════════════════════════════════════════════════════
+// 3. SIDE-VIEW PROJECTION PLANE (Dog X-Z plane)
+// ══════════════════════════════════════════════════════════════
+// In scene coords this is the x-y plane (at z=0), shown as a semi-transparent quad
+const planeGeom = new THREE.PlaneGeometry(3.0, 2.2);
+const planeMat = new THREE.MeshBasicMaterial({
+  color: 0x60ffb0, transparent: true, opacity: 0.12, side: THREE.DoubleSide, depthWrite: false
+});
+const projPlane = new THREE.Mesh(planeGeom, planeMat);
+projPlane.position.set(0.5, 1.0, 0); // sitting at z=0 (dog Y=0 center plane)
+// PlaneGeometry is in XY by default: x→right, y→up, normal→z, which is scene x-y plane. Perfect.
+projectionGroup.add(projPlane);
+
+// Plane border
+const borderMat = new THREE.LineBasicMaterial({color:0x60ffb0, transparent:true, opacity:0.5});
+const corners = [
+  new THREE.Vector3(-1.0, -0.1, 0),
+  new THREE.Vector3(2.0, -0.1, 0),
+  new THREE.Vector3(2.0, 2.1, 0),
+  new THREE.Vector3(-1.0, 2.1, 0),
+  new THREE.Vector3(-1.0, -0.1, 0),
+];
+const borderGeom = new THREE.BufferGeometry().setFromPoints(corners);
+const borderLine = new THREE.Line(borderGeom, borderMat);
+projectionGroup.add(borderLine);
+
+projectionGroup.add(makeTextSprite('Side-View Plane', new THREE.Vector3(0.5, 2.35, 0), '#60ffb0', 0.24));
+projectionGroup.add(makeTextSprite('Dog X-Z = Scene x-y', new THREE.Vector3(0.5, -0.35, 0), '#60ffb0', 0.22));
+
+// Small axis labels on the plane
+projectionGroup.add(makeTextSprite('← Dog +X (Fwd) →', new THREE.Vector3(0.5, -0.08, 0.22), '#ff8070', 0.16));
+projectionGroup.add(makeTextSprite('↑ Dog +Z (Up)', new THREE.Vector3(-1.2, 1.0, 0.22), '#70b8ff', 0.16));
+
+// Camera eye indicator (looking along Dog +Y = Scene -z)
+const eyeArrowOrigin = new THREE.Vector3(0.5, 1.0, 2.5);
+projectionGroup.add(makeArrow(new THREE.Vector3(0,0,-1), eyeArrowOrigin, 1.8, 0x60ff80, 'Camera Eye', new THREE.Vector3(0,0.1,0)));
+projectionGroup.add(makeTextSprite('Looking along Dog +Y', new THREE.Vector3(0.5, 1.4, 2.7), '#80ffa0', 0.20));
+
+scene.add(projectionGroup);
+
+// ══════════════════════════════════════════════════════════════
+// 4. PI FIRMWARE IK MATH PLANE (separate, offset right)
+// ══════════════════════════════════════════════════════════════
+const fwOrigin = new THREE.Vector3(3.5, 0.02, 0);
+const fwPlaneGeom = new THREE.PlaneGeometry(2.2, 1.8);
+const fwPlaneMat = new THREE.MeshBasicMaterial({
+  color: 0xffc840, transparent: true, opacity: 0.10, side: THREE.DoubleSide, depthWrite: false
+});
+const fwPlane = new THREE.Mesh(fwPlaneGeom, fwPlaneMat);
+fwPlane.position.set(3.5, 0.95, 0);
+firmwareGroup.add(fwPlane);
+
+firmwareGroup.add(makeArrow(new THREE.Vector3(1,0,0), fwOrigin, 1.2, 0xffc040, 'FW X (stride)', new THREE.Vector3(0.04,0.06,0)));
+firmwareGroup.add(makeArrow(new THREE.Vector3(0,1,0), fwOrigin, 1.2, 0xff8040, 'FW Y (height)', new THREE.Vector3(0.04,0.08,0)));
+
+firmwareGroup.add(makeTextSprite('Pi Firmware IK Frame', new THREE.Vector3(3.5, 2.0, 0), '#ffc860', 0.24));
+firmwareGroup.add(makeTextSprite('X=12·cos(θ)  Y=6·sin(θ)+H', new THREE.Vector3(3.5, -0.25, 0), '#ffa060', 0.18));
+firmwareGroup.add(makeTextSprite('Internal math vars, NOT a 3D frame', new THREE.Vector3(3.5, -0.55, 0), '#ff9060', 0.17));
+
+// Draw a small ellipse to represent the gait path
+const ellipsePts = [];
+for (let deg = 0; deg <= 360; deg += 4) {
+  const r = (deg * Math.PI) / 180;
+  const ex = 0.6 * Math.cos(r);
+  const ey = 0.3 * Math.sin(r) + 0.7;
+  ellipsePts.push(new THREE.Vector3(3.5 + ex, ey, 0));
+}
+const ellipseGeom = new THREE.BufferGeometry().setFromPoints(ellipsePts);
+const ellipseLine = new THREE.Line(ellipseGeom, new THREE.LineBasicMaterial({color:0xffc060, transparent:true, opacity:0.7}));
+firmwareGroup.add(ellipseLine);
+
+// Clamp line
+const clampPts = [new THREE.Vector3(2.6, 0.7, 0), new THREE.Vector3(4.4, 0.7, 0)];
+const clampGeom = new THREE.BufferGeometry().setFromPoints(clampPts);
+firmwareGroup.add(new THREE.Line(clampGeom, new THREE.LineDashedMaterial({color:0xffe080, dashSize:0.06, gapSize:0.04, transparent:true, opacity:0.6})));
+firmwareGroup.add(makeTextSprite('clamp Y=H', new THREE.Vector3(4.0, 0.82, 0), '#ffe080', 0.14));
+
+scene.add(firmwareGroup);
+
+// ══════════════════════════════════════════════════════════════
+// 5. MINI ROBOT DOG SILHOUETTE
+// ══════════════════════════════════════════════════════════════
+const bodyMat = new THREE.MeshStandardMaterial({color:0xc8d4e0, roughness:0.7, metalness:0.2, transparent:true, opacity:0.7});
+const legMat = new THREE.MeshStandardMaterial({color:0x8a9db0, roughness:0.6, metalness:0.3});
+const headMat = new THREE.MeshStandardMaterial({color:0xe0ddd4, roughness:0.7, metalness:0.1});
+
+// Body box
+const body = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.25, 0.4), bodyMat);
+body.position.set(0, 0.85, 0);
+robotGroup.add(body);
+
+// Head
+const head = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.2, 0.24), headMat);
+head.position.set(0.52, 0.92, 0);
+robotGroup.add(head);
+
+// Nose / forward indicator
+const nose = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.12, 8), new THREE.MeshStandardMaterial({color:0xff5a57, emissive:0xff2020, emissiveIntensity:0.3}));
+nose.rotation.z = -Math.PI/2;
+nose.position.set(0.68, 0.92, 0);
+robotGroup.add(nose);
+
+// Four legs (simple cylinders)
+const legPositions = [
+  {x: 0.28, z: 0.18, label:'FR'},
+  {x: 0.28, z:-0.18, label:'FL'},
+  {x:-0.28, z: 0.18, label:'RR'},
+  {x:-0.28, z:-0.18, label:'RL'},
+];
+legPositions.forEach(lp => {
+  // Upper leg
+  const upper = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.03, 0.35, 8), legMat);
+  upper.position.set(lp.x, 0.55, lp.z);
+  robotGroup.add(upper);
+  // Lower leg
+  const lower = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, 0.30, 8), legMat);
+  lower.position.set(lp.x + 0.05, 0.25, lp.z);
+  lower.rotation.z = 0.3;
+  robotGroup.add(lower);
+  // Foot
+  const foot = new THREE.Mesh(new THREE.SphereGeometry(0.04, 8, 6), new THREE.MeshStandardMaterial({color:0x2a3444}));
+  foot.position.set(lp.x + 0.08, 0.08, lp.z);
+  robotGroup.add(foot);
+});
+
+// Forward arrow on body
+robotGroup.add(makeTextSprite('NOSE →', new THREE.Vector3(0.72, 1.08, 0), '#ff6a60', 0.14));
+
+scene.add(robotGroup);
+
+// ══════════════════════════════════════════════════════════════
+// 6. "WRONG" vs "CORRECT" label comparison
+// ══════════════════════════════════════════════════════════════
+const wrongCorrectGroup = new THREE.Group();
+
+// Wrong label
+function makeComparisonSprite(text, pos, bgColor, textColor, opacity=0.85) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 512; canvas.height = 96;
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = bgColor;
+  ctx.roundRect(4,4,504,88,14);
+  ctx.fill();
+  ctx.font = 'bold 34px Menlo, Monaco, monospace';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillStyle = textColor;
+  ctx.fillText(text, 256, 52);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({map:tex,transparent:true,opacity,depthTest:false}));
+  sprite.scale.set(1.6, 0.30, 1);
+  sprite.position.copy(pos);
+  sprite.renderOrder = 210;
+  return sprite;
+}
+
+wrongCorrectGroup.add(makeComparisonSprite(
+  '✗ WRONG: "X horiz, Y vert"',
+  new THREE.Vector3(0.5, 3.1, 0),
+  'rgba(180,40,40,0.75)', '#ffc0c0'
+));
+wrongCorrectGroup.add(makeComparisonSprite(
+  '✓ CORRECT: "X horiz, Z vert"',
+  new THREE.Vector3(0.5, 2.75, 0),
+  'rgba(30,120,60,0.75)', '#b0ffb0'
+));
+scene.add(wrongCorrectGroup);
+
+// ══════════════════════════════════════════════════════════════
+// BUTTON CONTROLS
+// ══════════════════════════════════════════════════════════════
+const allGroups = [dogFrameGroup, sceneFrameGroup, projectionGroup, firmwareGroup, robotGroup, wrongCorrectGroup];
+function showAll() { allGroups.forEach(g => g.visible = true); }
+function hideAll() { allGroups.forEach(g => g.visible = false); }
+
+const savedCamPos = camera.position.clone();
+const savedCamTarget = controls.target.clone();
+
+document.getElementById('btnAll').onclick = () => { showAll(); updateBtns('btnAll'); };
+document.getElementById('btnDog').onclick = () => { hideAll(); dogFrameGroup.visible=true; robotGroup.visible=true; wrongCorrectGroup.visible=true; updateBtns('btnDog'); };
+document.getElementById('btnScene').onclick = () => { hideAll(); sceneFrameGroup.visible=true; dogFrameGroup.visible=true; robotGroup.visible=true; updateBtns('btnScene'); };
+document.getElementById('btnProjection').onclick = () => { hideAll(); projectionGroup.visible=true; dogFrameGroup.visible=true; robotGroup.visible=true; wrongCorrectGroup.visible=true; updateBtns('btnProjection'); };
+document.getElementById('btnFirmware').onclick = () => { hideAll(); firmwareGroup.visible=true; updateBtns('btnFirmware'); };
+document.getElementById('btnSideView').onclick = () => {
+  // Move camera to right side (looking along dog +Y = scene -z)
+  camera.position.set(0.3, 1.0, 5.0);
+  controls.target.set(0.3, 0.8, 0);
+  showAll();
+  updateBtns('btnSideView');
+};
+document.getElementById('btnReset').onclick = () => {
+  camera.position.copy(savedCamPos);
+  controls.target.copy(savedCamTarget);
+  showAll();
+  updateBtns('btnAll');
+};
+
+function updateBtns(activeId) {
+  document.querySelectorAll('#controls button').forEach(b => b.classList.toggle('active', b.id === activeId));
+}
+
+// ── Animate ───────────────────────────────────────────────────
+function animate() {
+  requestAnimationFrame(animate);
+  controls.update();
+  renderer.render(scene, camera);
+}
+animate();
+
+window.addEventListener('resize', () => {
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>

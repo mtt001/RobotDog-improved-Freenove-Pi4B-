@@ -1,0 +1,30 @@
+phase,parameter,value,unit,source,confidence,date,owner,notes
+A,L1_thigh_length,55,mm,MEASURED,80,2026-02-26,user,hip-pitch axis center to knee axis
+A,L2_shank_length,55,mm,ASSUMED,70,2026-02-26,copilot,estimated from assembly drawing scale using confirmed L1=55
+A,hip_offset_x,70,mm,MEASURED,75,2026-02-26,user,derived from measured FR-RR hip-roll pivot span 140mm (half-span from body center)
+A,hip_offset_y,37.5,mm,MEASURED,75,2026-02-26,user,derived from measured FR-FL hip-roll pivot span 75mm (half-span from body center)
+A,hip_offset_z,0,mm,ASSUMED,40,2026-02-26,copilot,symmetric baseline assumption
+B,S11_min_safe,65,deg,MEASURED,80,2026-02-26,user,safe margin before mechanical stop
+B,S11_max_safe,180,deg,MEASURED,80,2026-02-26,user,safe margin before mechanical stop
+B,S12_min_safe,0,deg,MEASURED,85,2026-02-26,user,user verified free motion without issue
+B,S12_max_safe,180,deg,MEASURED,85,2026-02-26,user,user verified free motion without issue
+B,S13_min_safe,0,deg,MEASURED,85,2026-02-26,user,user verified free motion without issue
+B,S13_max_safe,180,deg,MEASURED,85,2026-02-26,user,user verified free motion without issue
+C,S11_neutral_offset_from_90,0,deg,ASSUMED,65,2026-02-26,user,neutral offsets from measured assembly alignment
+C,S12_neutral_offset_from_90,0,deg,ASSUMED,65,2026-02-26,user,neutral offsets from measured assembly alignment
+C,S13_neutral_offset_from_90,0,deg,ASSUMED,65,2026-02-26,user,neutral offsets from measured assembly alignment
+D,imu_mount_roll,0,deg,ASSUMED,45,2026-02-26,user,IMU mount+bias from flat table calibration session
+D,imu_mount_pitch,0,deg,ASSUMED,45,2026-02-26,user,IMU mount+bias from flat table calibration session
+D,imu_mount_yaw,0,deg,ASSUMED,45,2026-02-26,user,IMU mount+bias from flat table calibration session
+D,imu_bias_roll,0,deg,ASSUMED,45,2026-02-26,user,IMU mount+bias from flat table calibration session
+D,imu_bias_pitch,0,deg,ASSUMED,45,2026-02-26,user,IMU mount+bias from flat table calibration session
+D,imu_bias_yaw,0,deg,ASSUMED,45,2026-02-26,user,IMU mount+bias from flat table calibration session
+E,servo_speed_under_load,2.28,deg_per_sec,SIMULATED,55,2026-02-26,copilot,Estimated from DigitalTwin servo command progression
+E,command_to_motion_latency,554.67,ms,SIMULATED,55,2026-02-26,copilot,Estimated from click-to-command-change in DigitalTwin
+F,backlash_deadband_S11,11.53,deg,SIMULATED,40,2026-02-26,copilot,Estimated in DigitalTwin low-amplitude reversal test
+F,backlash_deadband_S12,36.79,deg,SIMULATED,40,2026-02-26,copilot,Estimated in DigitalTwin low-amplitude reversal test
+F,backlash_deadband_S13,5.12,deg,SIMULATED,40,2026-02-26,copilot,Estimated in DigitalTwin low-amplitude reversal test
+G,foot_contact_model,,text,MEASURED,,-,-,point/polygon + dimensions
+G,floor_condition,,text,MEASURED,,-,-,surface and friction notes
+A,fr_fl_hip_roll_pivot_span,75,mm,MEASURED,75,2026-02-26,user,S11 axis center to S4 axis center
+A,fr_rr_hip_roll_pivot_span,140,mm,MEASURED,75,2026-02-26,user,S11 axis center to S8 axis center
