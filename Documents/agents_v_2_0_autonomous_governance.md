@@ -1,7 +1,7 @@
 # AGENTS.md
 
 ## Version
-v2.3 (2026-02-28 23:47 CST)
+v2.4 (2026-03-01 00:46 CST)
 
 ---
 
@@ -257,6 +257,20 @@ If divergence:
 - Require explicit instruction before:
 
   git push --force-with-lease
+
+---
+
+# 11. STATUS MESSAGE CONTACT (USER-PROVIDED)
+
+For completion/status iMessage trial updates, use:
+
+- Phone: 0937991869
+- Apple ID email: mengta941108@gmail.com
+
+Notes:
+
+- Attempt send to both when explicitly requested.
+- If Messages automation fails (for example AppleEvent timeout), report failure clearly in chat and continue with iCloud/AI_Reports updates as fallback.
 
 ---
 

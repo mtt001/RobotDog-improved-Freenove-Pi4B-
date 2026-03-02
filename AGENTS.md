@@ -1,7 +1,18 @@
 # AGENTS.md
 
 ## Version
-v2.2 (2026-02-28 23:47 CST)
+v3.5 (2026-03-01 22:30 CST)
+
+## Revision History
+- 2026-03-01 22:30 v3.5 - Finalized HIL Demo simulation (v2.92). Restored simulator integrity and synchronized procedural 'Action.py' routines [FL:0, RL:1, RR:2, FR:3].
+- 2026-03-01 22:15 v3.4 - Implementing HIL 'Action.py' Demo simulation (v2.90). Synchronized leg indexing with server-side source of truth.
+- 2026-03-01 21:42 v3.3 - Hardened Servo Test (v2.88). Synchronized sweep runner to simTime. Fixed toggle logic.
+- 2026-03-01 21:38 v3.2  Expanded Servo Gait View header (18px -> 30px) to provide dual vertical lanes for title/legend and leg labels, eliminating overlap.
+- 2026-03-01 21:20 v2.8  Moved HFE tag-pill down by 10px to ensure clearance from HAA label.
+- 2026-03-01 21:18 v2.7  Moved X-Z coordinate symbol to main header under 960x480 resolution text.
+- 2026-03-01 21:05 v2.6  Added proactive Safari refresh rule for Mac UI tasks: agents must use AppleScript to reload pages immediately.
+- 2026-03-01 20:56 v2.5  Updated contact information (corrected phone) and added Section 4 reporting requirement for clickable absolute file links.
+- 2026-03-01 10:19 v2.4  Added Sections 11 and 12 regarding iMessage status updates and UI development first-pass quality standards.
 
 ---
 
@@ -74,10 +85,10 @@ Server README must be synced and verified on Pi before completion.
 
 For any web/UI change:
 
-- Refresh focused page.
-- If none exists, open one.
-- Verify visually.
 - Verify no console errors.
+- **Reporting**: Always include the absolute file link or URL in the task report for the user to click/hard-refresh.
+- If no browser page exists, open one in Safari.
+- **Proactive Refresh**: On Mac, the agent MUST proactively refresh Safari using `osascript` to target the builds' URL.
 - Do not mark complete until confirmed.
 
 ---
@@ -253,6 +264,38 @@ If divergence:
 - Require explicit instruction before:
 
   git push --force-with-lease
+
+---
+
+# 11. STATUS MESSAGE CONTACT (USER-PROVIDED)
+
+For completion/status iMessage trial updates, use:
+
+- Phone: 0937991869
+- Apple ID email: mengta941108@gmail.com
+
+Notes:
+
+- Attempt send to both when explicitly requested.
+- If Messages automation fails (for example AppleEvent timeout), report failure clearly in chat and continue with iCloud/AI_Reports updates as fallback.
+
+---
+
+# 12. PRO-LEVEL UI FIRST-PASS STANDARD
+
+For any UI/UX task, default execution quality must be professional-first, not rush-first.
+
+Mandatory behavior:
+
+- Before editing, define a concise acceptance checklist (readability, spacing, hierarchy, overlap, stability).
+- Implement a complete first pass that targets production-level clarity instead of incremental quick fixes.
+- Avoid “back-and-forth micro-patching” unless new requirements are introduced.
+- If quality bar is not met after one pass, switch strategy immediately instead of repeating the same patch pattern.
+- Treat repeated visual regressions as process failure and trigger OSCILLATION safeguards.
+
+Completion rule:
+
+- Do not mark UI tasks complete until visual output is stable, readable, and review-ready in one continuous verification pass.
 
 ---
 

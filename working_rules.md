@@ -1,9 +1,12 @@
 # Working Rules
 
 ## Version
-v1.5 (2026-02-09 15:02 local time)
+v1.8 (2026-03-01 21:05 CST)
 
 ## Revision History
+- 2026-03-01 21:05 v1.8  Added mandatory proactive Safari refresh rule for Mac: Agent must use `osascript` to trigger a build refresh in Safari immediately after build completion.
+- 2026-03-01 20:47 v1.7  Added requirement for clickable absolute file links in task reports for UI/web builds to enable easy hard-refresh.
+- 2026-03-01 10:31 v1.6  Added mandatory build status report metadata rule: always include build version + date/time so users can verify the loaded webpage is the latest build.
 - 2026-02-09 15:02 v1.5  Added mandatory README impact update rule for Client/Server, with Pi-side sync/verification gate for `Server/README.md`.
 - 2026-02-09 14:16 v1.4  Added mandatory build-time verification rule (run maximum feasible tests) and explicit intervention escalation requirement.
 - 2026-02-09 12:01 v1.3  Expanded Pi source-of-truth rule to all `Server/` code/docs with mandatory sync + verification.
@@ -64,3 +67,28 @@ When changing any code file or Markdown file, always update that file's header/v
   - exactly what could not be run
   - the concrete intervention needed from user
 - Escalate to user immediately when intervention/authorization/manual action is required; do not silently skip critical verification.
+
+## Build Status Report Metadata (Web Update Proof)
+
+- For every build status report, always include:
+  - build version
+  - build date/time (timestamp)
+- Purpose: user must be able to confirm the opened webpage is the newest updated build.
+- If a visible build badge/header exists on the page, report those exact values in status messages.
+- Do not mark web update completion without reporting version + date/time explicitly.
+
+## Rule: Proactive UI Refresh (Agent-led)
+
+For every Mac UI/web build, the agent MUST proactively refresh Safari:
+- Use `osascript` to target the Safari tab or open the local file.
+- Use a cache-busting URL parameter (e.g., `?v=timestamp`) to bypass local caching.
+- Do not wait for the user to click the link; perform the refresh immediately upon completion.
+- Still include the clickable link in the report as a fallback and for manual hard-refresh reference.
+
+## Rule: Task Report Clickable Links (UI Verified)
+
+For every UI/web build task, the final report MUST include:
+- An absolute file link or URL to the focused page (e.g., `[Label](file:///Users/...)`).
+- Explicit instruction for the user to click it and perform a **hard refresh** (Cmd+Shift+R).
+- If no focused page exists in Safari, open the page before reporting.
+- Purpose: Ensure the user is viewing the exact build version reported.

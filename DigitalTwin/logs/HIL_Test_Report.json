@@ -1,0 +1,61 @@
+{
+  "ok": true,
+  "mode": "walk",
+  "roll_ranges": {
+    "11": 4.810000000000002,
+    "8": 4.799999999999997,
+    "7": 4.070000000000007,
+    "4": 4.070000000000007
+  },
+  "dyn_ranges": {
+    "12": 18.869999999999997,
+    "13": 8.949999999999989,
+    "9": 17.03,
+    "10": 8.689999999999998,
+    "6": 19.309999999999988,
+    "5": 10.219999999999999,
+    "3": 17.680000000000007,
+    "2": 9.990000000000009
+  },
+  "hil_report": {
+    "status": "pass",
+    "tick": 364,
+    "margin": 0.08516251086843378,
+    "marginThreshold": 0.03,
+    "failReason": "",
+    "failPhaseLeg": "",
+    "supportPolySize": 2,
+    "stanceLegKeys": [
+      "front_right",
+      "rear_left"
+    ],
+    "antiPhaseViolations": 0,
+    "antiSkateViolations": 0,
+    "swingClearViolations": 0,
+    "penetrationViolations": 0,
+    "divergenceCount": 0,
+    "latestDivergence": null,
+    "unstableCount": 0,
+    "stableCount": 364,
+    "simTimeSec": 3.6399999999999664,
+    "failureSnapshots": [],
+    "replay": {
+      "recording": false,
+      "replaying": false,
+      "frames": 239,
+      "index": 0
+    }
+  },
+  "hil_sample_count": 16,
+  "checks": {
+    "mode_ok": true,
+    "roll_ok": true,
+    "dynamic_ok": true,
+    "report_ok": true,
+    "margin_ok": true,
+    "anti_skate_ok": true,
+    "swing_clear_ok": true,
+    "penetration_ok": true,
+    "com_inside_crawl_ok": true
+  }
+}
